@@ -153,7 +153,8 @@ ipcMain.handle('gemini:sendMessage', async (event, { message, workingDir, option
   const cmdParts = ['gemini'];
 
   // Quote the message to handle special characters
-  const escapedMessage = message.replace(/"/g, '\\"');
+  // Replace newlines with spaces — cmd.exe breaks on literal newlines in quoted strings
+  const escapedMessage = message.replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ');
   cmdParts.push('-p', `"${escapedMessage}"`);
 
   // Use structured JSON output for reliable parsing
@@ -344,4 +345,41 @@ ipcMain.handle('gemini:listSessions', async (_, workingDir) => {
     proc.on('close', () => resolve(output.trim()));
     proc.on('error', () => resolve(''));
   });
+});
+
+// Copy attached files into working directory, return list of { original, dest, filename }
+ipcMain.handle('files:copyToWorkDir', async (_, { files, workingDir }) => {
+  const attachDir = path.join(workingDir, '.gemini-attachments');
+  if (!fs.existsSync(attachDir)) {
+    fs.mkdirSync(attachDir, { recursive: true });
+  }
+  // Override parent .gitignore so the @ processor can read all file types
+  const localGitignore = path.join(attachDir, '.gitignore');
+  if (!fs.existsSync(localGitignore)) {
+    fs.writeFileSync(localGitignore, '# Allow all files for Gemini CLI @ references\n!*\n');
+  }
+  const results = [];
+  for (const filePath of files) {
+    const filename = path.basename(filePath);
+    const dest = path.join(attachDir, filename);
+    try {
+      fs.copyFileSync(filePath, dest);
+      results.push({ original: filePath, dest, filename });
+    } catch (e) {
+      console.error('Failed to copy attached file:', e);
+    }
+  }
+  return results;
+});
+
+// Clean up copied attachment files
+ipcMain.handle('files:cleanAttachments', async (_, workingDir) => {
+  const attachDir = path.join(workingDir, '.gemini-attachments');
+  try {
+    if (fs.existsSync(attachDir)) {
+      fs.rmSync(attachDir, { recursive: true, force: true });
+    }
+  } catch (e) {
+    console.error('Failed to clean attachments:', e);
+  }
 });

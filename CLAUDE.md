@@ -33,7 +33,8 @@ Electron app (v34) wrapping the Gemini CLI (`@google/gemini-cli`). Three-process
 
 ## Key Patterns
 
-- **Windows CLI quoting**: Gemini CLI is a `.cmd` file requiring `shell: true` in `spawn()`. Message is escaped with `\"` and wrapped in double quotes.
+- **Windows CLI quoting**: Gemini CLI is a `.cmd` file requiring `shell: true` in `spawn()`. Message is escaped with `\"` and wrapped in double quotes. Newlines are replaced with spaces (cmd.exe breaks on literal newlines in quoted strings).
+- **File attachment**: Uses `@path` syntax for Gemini CLI's at-command processor. Backslashes converted to forward slashes. Includes fallback read instruction since `@` respects `.gitignore`. Binary images (PNG/JPG) cannot be visually analyzed — CLI limitation (no multimodal support in non-interactive mode).
 - **Version check**: `gemini --version` hangs on Windows. Use `where gemini` + read `package.json` from the npm global install path instead.
 - **Session resume**: `--resume latest` for follow-up messages in the same session. Tracked via `state.messageCount`.
 - **MCP server skip**: `--allowed-mcp-server-names none` saves ~15s startup time.
@@ -51,3 +52,4 @@ Electron app (v34) wrapping the Gemini CLI (`@google/gemini-cli`). Three-process
 | `src/index.html` | ~280 | UI structure |
 | `src/styles.css` | ~1500 | All styling, dark/light theme vars |
 | `.mcp.json` | MCP config for Playwright CDP connection |
+| `test/control.js` | Playwright CDP script for automated UI testing |

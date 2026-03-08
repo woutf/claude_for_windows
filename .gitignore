@@ -2,4 +2,6 @@ node_modules/
 dist/
 out/
 *.png
-!src/icon.png
+\!src/icon.png
+test/
+.playwright-mcp/

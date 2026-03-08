@@ -40,6 +40,10 @@ contextBridge.exposeInMainWorld('geminiAPI', {
     ipcRenderer.on('gemini:stream', (_, data) => callback(data));
   },
 
+  // File attachments
+  copyToWorkDir: (files, workingDir) => ipcRenderer.invoke('files:copyToWorkDir', { files, workingDir }),
+  cleanAttachments: (workingDir) => ipcRenderer.invoke('files:cleanAttachments', workingDir),
+
   // Markdown parsing (sanitized)
   parseMarkdown: (text) => DOMPurify.sanitize(marked.parse(text))
 });

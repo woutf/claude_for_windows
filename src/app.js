@@ -696,10 +696,17 @@ async function sendMessage() {
     if (prefix) fullMessage = prefix + message;
   }
 
-  // Append attached file references to the prompt
+  // Copy attached files into working directory and reference by relative path
+  let copiedFiles = [];
   if (state.attachedFiles.length > 0) {
-    const fileList = state.attachedFiles.map(f => f).join('\n');
-    fullMessage += `\n\n[Attached files - read these files to fulfill the request]:\n${fileList}`;
+    copiedFiles = await geminiAPI.copyToWorkDir(state.attachedFiles, state.workingDir);
+    if (copiedFiles.length > 0) {
+      const refs = copiedFiles.map(f => {
+        const rel = '.gemini-attachments/' + f.filename;
+        return rel.includes(' ') ? `@"${rel}"` : `@${rel}`;
+      }).join(' ');
+      fullMessage += ' ' + refs;
+    }
   }
 
   const displayMessage = state.attachedFiles.length > 0
@@ -893,6 +900,10 @@ function handleStreamEvent(event) {
     case 'done': {
       removeThinkingIndicator();
       finishStreaming();
+      // Clean up copied attachment files
+      if (state.workingDir) {
+        geminiAPI.cleanAttachments(state.workingDir).catch(() => {});
+      }
 
       if (streamBuffer.trim()) {
         const session = state.sessions.find(s => s.id === state.activeSessionId);
