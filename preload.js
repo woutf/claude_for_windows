@@ -55,7 +55,14 @@ contextBridge.exposeInMainWorld('geminiAPI', {
   listInstalledExtensions: () => ipcRenderer.invoke('gemini:listInstalledExtensions'),
 
   // ACP mode
+  preloadACP: (options) => ipcRenderer.invoke('gemini:preloadACP', options),
   respondPermission: (toolId, outcome) => ipcRenderer.invoke('gemini:respondPermission', { toolId, outcome }),
+
+  // App settings (startup, tray)
+  setAutoLaunch: (enabled) => ipcRenderer.invoke('app:setAutoLaunch', enabled),
+  getAutoLaunch: () => ipcRenderer.invoke('app:getAutoLaunch'),
+  setMinimizeToTray: (enabled) => ipcRenderer.invoke('app:setMinimizeToTray', enabled),
+  getMinimizeToTray: () => ipcRenderer.invoke('app:getMinimizeToTray'),
 
   // File utilities
   readFileBase64: (filePath) => ipcRenderer.invoke('files:readAsBase64', filePath),

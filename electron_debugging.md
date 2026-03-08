@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide covers how to control, screenshot, and test the Gemini Cowork Electron app using Playwright — either via MCP tools in Claude Code or standalone scripts.
+This guide covers how to control, screenshot, and test the GeminUI Electron app using Playwright — either via MCP tools in Claude Code or standalone scripts.
 
 > **Key fact:** The official `@playwright/mcp` does NOT support Electron. PR #1291 was proposed in Dec 2025 but rejected by maintainers. Use one of the approaches below instead.
 
@@ -37,7 +37,7 @@ npx electron . --dev
 curl http://localhost:9222/json/version
 # Should return JSON with webSocketDebuggerUrl
 curl http://localhost:9222/json
-# Should list pages including "Gemini Cowork"
+# Should list pages including "GeminUI"
 ```
 
 ### Step 4: Configure Playwright MCP with `--cdp-endpoint`

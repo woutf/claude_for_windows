@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -12,12 +12,17 @@ if (process.argv.includes('--dev')) {
 }
 
 let mainWindow;
+let tray = null;
+let minimizeToTray = false;
 let activeProcess = null;
 let acpProcess = null;
 let acpMessageId = 1;
 let acpSessionId = null;
 let acpPendingResolves = {};
 let acpPermissionRequestIds = {};
+let acpCancelled = false;
+let acpReadyPromise = null;
+let acpHasSession = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -27,14 +32,14 @@ function createWindow() {
     minHeight: 600,
     frame: false,
     titleBarStyle: 'hidden',
+    icon: path.join(__dirname, 'build', 'icon.png'),
     backgroundColor: '#1a1a2e',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false
-    },
-    // icon: path.join(__dirname, 'src', 'icon.png')
+    }
   });
 
   mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'));
@@ -50,9 +55,42 @@ function createWindow() {
   mainWindow.on('unmaximize', () => {
     mainWindow.webContents.send('window:maximized', false);
   });
+
+  // Intercept close to minimize to tray when enabled
+  mainWindow.on('close', (e) => {
+    if (minimizeToTray && !app.isQuitting) {
+      e.preventDefault();
+      mainWindow.hide();
+    }
+  });
+}
+
+function createTray() {
+  if (tray) return;
+  const icon = nativeImage.createFromPath(path.join(__dirname, 'build', 'icon.png')).resize({ width: 16, height: 16 });
+  tray = new Tray(icon);
+  tray.setToolTip('GeminUI');
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Show', click: () => { mainWindow.show(); mainWindow.focus(); } },
+    { type: 'separator' },
+    { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } }
+  ]);
+  tray.setContextMenu(contextMenu);
+  tray.on('double-click', () => { mainWindow.show(); mainWindow.focus(); });
+}
+
+function destroyTray() {
+  if (tray) {
+    tray.destroy();
+    tray = null;
+  }
 }
 
 app.whenReady().then(createWindow);
+
+app.on('before-quit', () => {
+  app.isQuitting = true;
+});
 
 app.on('window-all-closed', () => {
   if (acpProcess) {
@@ -75,6 +113,29 @@ ipcMain.handle('window:maximize', () => {
 });
 ipcMain.handle('window:close', () => mainWindow.close());
 ipcMain.handle('window:isMaximized', () => mainWindow.isMaximized());
+
+// Launch on startup
+ipcMain.handle('app:setAutoLaunch', (_, enabled) => {
+  app.setLoginItemSettings({ openAtLogin: enabled });
+  return true;
+});
+ipcMain.handle('app:getAutoLaunch', () => {
+  return app.getLoginItemSettings().openAtLogin;
+});
+
+// Minimize to tray
+ipcMain.handle('app:setMinimizeToTray', (_, enabled) => {
+  minimizeToTray = enabled;
+  if (enabled) {
+    createTray();
+  } else {
+    destroyTray();
+  }
+  return true;
+});
+ipcMain.handle('app:getMinimizeToTray', () => {
+  return minimizeToTray;
+});
 
 // Folder selection
 ipcMain.handle('dialog:selectFolder', async () => {
@@ -220,32 +281,35 @@ function handleACPMessage(msg) {
     return;
   }
 
-  // Agent request: client/requestPermission
-  if (msg.method === 'client/requestPermission' && msg.params) {
+  // Agent request: permission needed
+  if ((msg.method === 'client/requestPermission' || msg.method === 'session/request_permission') && msg.params) {
     const { toolCall, options } = msg.params;
-    acpPermissionRequestIds[toolCall.toolCallId] = msg.id;
-    mainWindow.webContents.send('gemini:stream', {
-      type: 'permission_request',
-      tool_id: toolCall.toolCallId,
-      tool_name: toolCall.title || toolCall.kind || 'tool',
-      parameters: toolCall.content,
-      options: options
-    });
+    if (toolCall) {
+      acpPermissionRequestIds[toolCall.toolCallId] = msg.id;
+      mainWindow.webContents.send('gemini:stream', {
+        type: 'permission_request',
+        tool_id: toolCall.toolCallId,
+        tool_name: toolCall.title || toolCall.kind || 'tool',
+        parameters: toolCall.content,
+        options: options
+      });
+    }
     return;
   }
 }
 
-// ACP mode: spawn long-lived process with bidirectional JSON-RPC
-async function spawnACPProcess(workingDir, options) {
+// ACP mode: spawn process and run initialize (the slow part)
+async function spawnACPProcess(options) {
   const cmdParts = ['gemini', '--experimental-acp'];
   if (options.model) cmdParts.push('-m', options.model);
   if (options.sandbox) cmdParts.push('-s');
+  if (!options.subagents) cmdParts.push('--allowed-mcp-server-names', 'none');
 
   const env = { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' };
   if (options.apiKey) env.GEMINI_API_KEY = options.apiKey;
+  acpCancelled = false;
 
   acpProcess = spawn(cmdParts[0], cmdParts.slice(1), {
-    cwd: workingDir || undefined,
     shell: true,
     env
   });
@@ -261,30 +325,48 @@ async function spawnACPProcess(workingDir, options) {
         const msg = JSON.parse(line);
         handleACPMessage(msg);
       } catch (e) {
-        mainWindow.webContents.send('gemini:stream', { type: 'text', content: line });
+        if (mainWindow) mainWindow.webContents.send('gemini:stream', { type: 'text', content: line });
       }
     }
   });
 
-  acpProcess.stderr.on('data', () => {});
+  let stderrBuffer = '';
+  acpProcess.stderr.on('data', (data) => { stderrBuffer += data.toString(); });
 
   acpProcess.on('close', (code) => {
+    const wasCancelled = acpCancelled;
+    const hadSession = acpHasSession;
+    for (const id of Object.keys(acpPendingResolves)) {
+      acpPendingResolves[id].reject(new Error('ACP process exited with code ' + code));
+    }
     acpProcess = null;
     acpSessionId = null;
     acpMessageId = 1;
     acpPendingResolves = {};
     acpPermissionRequestIds = {};
-    mainWindow.webContents.send('gemini:stream', { type: 'done', code, error: 'ACP process exited' });
+    acpCancelled = false;
+    acpReadyPromise = null;
+    acpHasSession = false;
+    // Only notify renderer if there was an active session (not a background preload crash)
+    if (!wasCancelled && hadSession && mainWindow) {
+      mainWindow.webContents.send('gemini:stream', { type: 'done', code, error: stderrBuffer || 'ACP process exited' });
+    }
   });
 
   acpProcess.on('error', (err) => {
+    const hadSession = acpHasSession;
     acpProcess = null;
     acpSessionId = null;
     acpMessageId = 1;
     acpPendingResolves = {};
     acpPermissionRequestIds = {};
-    mainWindow.webContents.send('gemini:stream', { type: 'error', content: err.message });
+    acpReadyPromise = null;
+    acpHasSession = false;
+    if (hadSession && mainWindow) mainWindow.webContents.send('gemini:stream', { type: 'error', content: err.message });
   });
+
+  // Wait for process to be ready before sending init
+  await new Promise(resolve => setTimeout(resolve, 2000));
 
   // Initialize with correct ACP protocol
   await sendACPRequest('initialize', {
@@ -293,25 +375,44 @@ async function spawnACPProcess(workingDir, options) {
       fs: { readTextFile: false, writeTextFile: false },
       terminal: false
     },
-    clientInfo: { name: 'gemini-cowork', version: '1.0.0' }
+    clientInfo: { name: 'geminui', version: '1.0.0' }
   });
+}
 
-  // Create session
+// Create ACP session (fast, called before first message)
+async function ensureACPSession(workingDir) {
+  if (acpSessionId) return;
   const sessionResult = await sendACPRequest('session/new', {
     cwd: workingDir || process.cwd(),
     mcpServers: []
   });
   acpSessionId = sessionResult.sessionId;
+  acpHasSession = true;
 }
+
+// Preload ACP process in background
+ipcMain.handle('gemini:preloadACP', async (_, options) => {
+  if (acpProcess || acpReadyPromise) return;
+  acpReadyPromise = spawnACPProcess(options).then(() => {
+    acpReadyPromise = null;
+  }).catch(() => {
+    acpReadyPromise = null;
+  });
+});
 
 // Send message to Gemini CLI
 ipcMain.handle('gemini:sendMessage', async (event, { message, workingDir, options }) => {
   // ACP mode: bidirectional communication via stdin/stdout
   if (options.useACP) {
     try {
-      if (!acpProcess) {
-        await spawnACPProcess(workingDir, options);
+      // Wait for preload if in-flight, or spawn fresh
+      if (acpReadyPromise) {
+        await acpReadyPromise;
       }
+      if (!acpProcess) {
+        await spawnACPProcess(options);
+      }
+      await ensureACPSession(workingDir);
 
       const promptContent = [];
       if (options.imageAttachments && options.imageAttachments.length > 0) {
@@ -464,12 +565,20 @@ ipcMain.handle('gemini:sendMessage', async (event, { message, workingDir, option
 // Cancel active Gemini process
 ipcMain.handle('gemini:cancel', () => {
   if (acpProcess) {
-    acpProcess.kill('SIGTERM');
+    acpCancelled = true;
+    // Clear pending resolves without rejecting (prevents error cascades)
+    acpPendingResolves = {};
+    // Send single clean done event
+    mainWindow.webContents.send('gemini:stream', { type: 'done', code: 0, error: '' });
+    // Kill process tree on Windows
+    try { spawn('taskkill', ['/PID', String(acpProcess.pid), '/T', '/F'], { shell: true }); } catch (e) {}
     acpProcess = null;
     acpSessionId = null;
     acpMessageId = 1;
     acpPendingResolves = {};
     acpPermissionRequestIds = {};
+    acpReadyPromise = null;
+    acpHasSession = false;
     return true;
   }
   if (activeProcess) {

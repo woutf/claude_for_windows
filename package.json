@@ -1,7 +1,7 @@
 {
-  "name": "gemini-cowork",
+  "name": "geminui",
   "version": "1.0.0",
-  "description": "Gemini Cowork - AI Desktop Assistant powered by Gemini CLI",
+  "description": "GeminUI - AI Desktop Assistant powered by Gemini CLI",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -9,7 +9,7 @@
     "build": "electron-builder --win",
     "dist": "electron-builder --win --publish never"
   },
-  "author": "Gemini Cowork",
+  "author": "GeminUI",
   "license": "MIT",
   "dependencies": {
     "dompurify": "^3.2.0",
@@ -21,8 +21,8 @@
     "playwright": "^1.58.2"
   },
   "build": {
-    "appId": "com.gemini.cowork",
-    "productName": "Gemini Cowork",
+    "appId": "com.geminui.app",
+    "productName": "GeminUI",
     "directories": {
       "output": "dist"
     },
@@ -32,6 +32,7 @@
       "src/**/*",
       "node_modules/**/*"
     ],
+    "icon": "build/icon.png",
     "win": {
       "target": [
         {

@@ -1,5 +1,5 @@
 /* ============================================
-   Gemini Cowork - Desktop App Styles
+   GeminUI - Desktop App Styles
    ============================================ */
 
 :root {
@@ -122,6 +122,10 @@ html, body {
   padding-left: 16px;
 }
 
+.titlebar-drag-right {
+  padding-left: 0;
+}
+
 .titlebar-logo {
   display: flex;
   align-items: center;
@@ -132,11 +136,34 @@ html, body {
   flex-shrink: 0;
 }
 
-.titlebar-title {
+.mode-toggle {
+  display: flex;
+  -webkit-app-region: no-drag;
+  background: rgba(255,255,255,0.06);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.mode-btn {
+  padding: 4px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-on-dark-secondary);
   font-size: 13px;
   font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.mode-btn:hover {
   color: var(--text-on-dark);
-  letter-spacing: 0.01em;
+}
+
+.mode-btn.active {
+  background: rgba(255,255,255,0.12);
+  color: var(--text-on-dark);
 }
 
 .titlebar-controls {
@@ -574,6 +601,50 @@ html, body {
   background: var(--bg-tertiary);
   border-color: var(--gemini-blue);
   color: var(--gemini-blue);
+}
+
+.welcome-chat-input {
+  width: 100%;
+  max-width: 560px;
+  margin-top: 8px;
+}
+
+.welcome-input-wrapper {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  background: var(--bg-input);
+  border: 1.5px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 8px 8px 8px 16px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.welcome-input-wrapper:focus-within {
+  border-color: var(--gemini-blue);
+  box-shadow: 0 0 0 3px rgba(66, 133, 244, 0.12);
+}
+
+#welcome-chat-textarea {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  resize: none;
+  max-height: 120px;
+  padding: 4px 0;
+  background: transparent;
+}
+
+.welcome-chat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 16px;
 }
 
 /* ============================================
@@ -1032,75 +1103,73 @@ html, body {
 }
 
 /* Model selector */
-.model-select-btn {
+.model-toggle {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 10px;
+  padding: 2px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-xl);
   background: var(--bg-primary);
+}
+
+.model-toggle svg {
+  margin-left: 6px;
+}
+
+.model-toggle-btn {
+  padding: 2px 12px;
+  border: none;
+  background: transparent;
   font-family: var(--font-sans);
   font-size: 11px;
-  color: var(--text-secondary);
+  font-weight: 500;
+  color: var(--text-tertiary);
+  border-radius: var(--radius-xl);
   cursor: pointer;
   transition: all 0.15s;
 }
 
-.model-select-btn:hover {
-  border-color: var(--gemini-blue);
+.model-toggle-btn:hover {
   color: var(--text-primary);
 }
 
-.model-dropdown {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-lg);
-  min-width: 180px;
-  padding: 4px 0;
-  z-index: 50;
+.model-toggle-btn.active {
+  background: var(--gemini-blue);
+  color: white;
 }
 
-.model-dropdown-group {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
-  padding: 6px 12px 2px;
-}
-
-.model-option {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 6px 12px;
-  border: none;
-  background: none;
-  font-family: var(--font-sans);
-  font-size: 12px;
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.model-option:hover {
+.setting-model-toggle {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
   background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
 }
 
-.model-option.active {
-  color: var(--gemini-blue);
+.setting-model-btn {
+  flex: 1;
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 13px;
   font-weight: 500;
+  color: var(--text-secondary);
+  border-radius: calc(var(--radius-sm) - 2px);
+  cursor: pointer;
+  transition: all 0.15s;
 }
 
-.model-dropdown-divider {
-  height: 1px;
-  background: var(--border-light);
-  margin: 4px 0;
+.setting-model-btn:hover {
+  color: var(--text-primary);
+}
+
+.setting-model-btn.active {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
 /* ============================================
@@ -1421,6 +1490,27 @@ html, body {
 }
 .session-item:hover .session-archive { opacity: 1; }
 
+.session-pin {
+  opacity: 0;
+  font-size: 11px;
+  padding: 0 2px;
+  color: var(--text-on-dark-secondary);
+  transition: opacity 0.12s;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.session-item:hover .session-pin { opacity: 1; }
+.session-item.pinned .session-pin { opacity: 0.7; }
+.session-item.pinned .session-dot {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: none;
+  color: var(--gemini-blue);
+  display: flex;
+  align-items: center;
+}
+
 /* ============================================
    Thinking Timer
    ============================================ */
@@ -1686,6 +1776,13 @@ html, body {
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 4px;
+}
+
+.permission-file {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 2px 0;
 }
 
 .permission-params {

@@ -81,10 +81,10 @@ node test/control.js snapshot                     # Accessibility tree (JSON)
 
 ```bash
 # Read app state
-node test/control.js eval "JSON.stringify(JSON.parse(localStorage.getItem('gemini-cowork-state')).settings)"
+node test/control.js eval "JSON.stringify(JSON.parse(localStorage.getItem('geminui-state')).settings)"
 
 # Set state and reload
-node test/control.js eval "const s = JSON.parse(localStorage.getItem('gemini-cowork-state')); s.workingDir = 'C:/path'; localStorage.setItem('gemini-cowork-state', JSON.stringify(s)); 'ok'"
+node test/control.js eval "const s = JSON.parse(localStorage.getItem('geminui-state')); s.workingDir = 'C:/path'; localStorage.setItem('geminui-state', JSON.stringify(s)); 'ok'"
 node test/control.js eval "location.reload()"
 
 # Call IPC methods directly (bypasses UI)

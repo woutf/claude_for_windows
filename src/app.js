@@ -1,5 +1,5 @@
 // ============================================
-// Gemini Cowork - Renderer
+// GeminUI - Renderer
 // ============================================
 
 ;(function() {
@@ -13,12 +13,13 @@ const state = {
   isStreaming: false,
   settings: {
     apiKey: '',
-    model: '',
-    approvalMode: 'auto_edit',
+    model: 'gemini-3-flash-preview',
+    approvalMode: 'yolo',
     sandbox: false,
     subagents: false,
-    useACP: true,
-    instructions: ''
+    useACP: false,
+    instructions: '',
+    minimizeToTray: false
   },
   geminiVersion: null,
   messageCount: 0,
@@ -26,18 +27,20 @@ const state = {
   folderInstructions: null,
   sessionFilter: 'all',
   sessionSearchQuery: '',
-  theme: localStorage.getItem('gemini-cowork-theme') || 'dark'
+  theme: localStorage.getItem('geminui-theme') || 'dark',
+  mode: 'chat'
 };
 
 // Load saved state
 function loadState() {
   try {
-    const saved = localStorage.getItem('gemini-cowork-state');
+    const saved = localStorage.getItem('geminui-state');
     if (saved) {
       const parsed = JSON.parse(saved);
       if (parsed.settings) Object.assign(state.settings, parsed.settings);
       if (parsed.workingDir) state.workingDir = parsed.workingDir;
       if (parsed.sessions) state.sessions = parsed.sessions;
+      if (parsed.mode) state.mode = parsed.mode;
     }
   } catch (e) {
     console.error('Failed to load state:', e);
@@ -46,9 +49,10 @@ function loadState() {
 
 function saveState() {
   try {
-    localStorage.setItem('gemini-cowork-state', JSON.stringify({
+    localStorage.setItem('geminui-state', JSON.stringify({
       settings: state.settings,
       workingDir: state.workingDir,
+      mode: state.mode,
       sessions: state.sessions.map(s => ({
         ...s,
         messages: s.messages.slice(-50)
@@ -84,7 +88,6 @@ const elements = {
   btnMaximize: $('#btn-maximize'),
   btnClose: $('#btn-close'),
   settingApiKey: $('#setting-apikey'),
-  settingModel: $('#setting-model'),
   settingApproval: $('#setting-approval'),
   settingSandbox: $('#setting-sandbox'),
   settingInstructions: $('#setting-instructions'),
@@ -93,9 +96,8 @@ const elements = {
   authStatusText: $('#auth-status-text'),
   btnAttach: $('#btn-attach'),
   attachedFiles: $('#attached-files'),
-  btnModelSelect: $('#btn-model-select'),
-  modelSelectLabel: $('#model-select-label'),
-  modelDropdown: $('#model-dropdown'),
+  modelToggle: $('#model-toggle'),
+  settingModelToggle: $('#setting-model-toggle'),
   btnTheme: $('#btn-theme'),
   themeLabel: $('#theme-label'),
   themeIconLight: $('#theme-icon-light'),
@@ -103,6 +105,17 @@ const elements = {
   sessionSearch: $('#session-search'),
   settingSubagents: $('#setting-subagents'),
   settingACP: $('#setting-acp'),
+  settingAutoLaunch: $('#setting-autolaunch'),
+  settingTray: $('#setting-tray'),
+  modeToggle: $('#mode-toggle'),
+  btnNewTaskLabel: $('#btn-new-task-label'),
+  welcomeTitle: $('#welcome-title'),
+  welcomeSubtitle: $('#welcome-subtitle'),
+  welcomeActionsCowork: $('#welcome-actions-cowork'),
+  welcomeSuggestionsCowork: $('#welcome-suggestions-cowork'),
+  welcomeChatInput: $('#welcome-chat-input'),
+  welcomeChatTextarea: $('#welcome-chat-textarea'),
+  welcomeChatSend: $('#welcome-chat-send'),
   btnExtensions: $('#btn-extensions'),
   extensionsModal: $('#extensions-modal'),
   btnCloseExtensions: $('#btn-close-extensions'),
@@ -134,6 +147,50 @@ function setMarkdownContent(el, markdownText) {
 }
 
 // ============================================
+// Mode Switching (Chat / Cowork)
+// ============================================
+
+function switchMode(mode, isInit) {
+  state.mode = mode;
+  if (!isInit) {
+    state.activeSessionId = null;
+    state.messageCount = 0;
+  }
+
+  // Update toggle buttons
+  elements.modeToggle.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+
+  // Update sidebar button label
+  elements.btnNewTaskLabel.textContent = mode === 'chat' ? 'New Chat' : 'New Task';
+
+  // Update welcome screen
+  const isChat = mode === 'chat';
+  elements.welcomeTitle.textContent = isChat ? 'How can I help you?' : 'Welcome to GeminUI';
+  elements.welcomeSubtitle.textContent = isChat ? '' : 'Your AI desktop assistant powered by Gemini';
+  elements.welcomeSubtitle.style.display = isChat ? 'none' : '';
+  elements.welcomeActionsCowork.style.display = isChat ? 'none' : '';
+  elements.welcomeSuggestionsCowork.style.display = isChat ? 'none' : '';
+  elements.welcomeChatInput.style.display = isChat ? '' : 'none';
+  document.getElementById('setup-check').style.display = isChat ? 'none' : '';
+
+  // Update task header folder display visibility
+  const folderHeader = document.getElementById('current-folder-display');
+  if (folderHeader) folderHeader.style.display = isChat ? 'none' : '';
+
+  // Update task screen input placeholder
+  elements.messageInput.placeholder = isChat ? 'Ask anything...' : 'Describe your task...';
+
+  renderSessions();
+  if (!isInit) {
+    clearMessages();
+    showWelcomeScreen();
+  }
+  saveState();
+}
+
+// ============================================
 // Initialization
 // ============================================
 
@@ -142,6 +199,7 @@ async function init() {
   applyTheme();
   bindEvents();
   applySettings();
+  switchMode(state.mode, true);
   renderSessions();
 
   const version = await geminiAPI.checkInstalled();
@@ -177,6 +235,16 @@ async function init() {
       renderMessages(session);
     }
   }
+
+  // Preload ACP process in background so first query is instant
+  if (state.settings.useACP && version) {
+    geminiAPI.preloadACP({
+      apiKey: state.settings.apiKey || undefined,
+      model: state.settings.model || undefined,
+      sandbox: state.settings.sandbox,
+      subagents: state.settings.subagents
+    });
+  }
 }
 
 // ============================================
@@ -190,6 +258,29 @@ function bindEvents() {
 
   geminiAPI.onMaximized((isMax) => {
     elements.btnMaximize.title = isMax ? 'Restore' : 'Maximize';
+  });
+
+  // Mode toggle
+  elements.modeToggle.addEventListener('click', (e) => {
+    const btn = e.target.closest('.mode-btn');
+    if (btn && btn.dataset.mode !== state.mode) {
+      switchMode(btn.dataset.mode);
+    }
+  });
+
+  // Welcome chat input
+  elements.welcomeChatTextarea.addEventListener('input', () => {
+    autoResizeTextarea(elements.welcomeChatTextarea);
+    elements.welcomeChatSend.disabled = !elements.welcomeChatTextarea.value.trim();
+  });
+  elements.welcomeChatTextarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (elements.welcomeChatTextarea.value.trim()) sendFromWelcomeChat();
+    }
+  });
+  elements.welcomeChatSend.addEventListener('click', () => {
+    if (elements.welcomeChatTextarea.value.trim()) sendFromWelcomeChat();
   });
 
   elements.btnSelectFolder.addEventListener('click', selectFolder);
@@ -267,7 +358,9 @@ function bindEvents() {
   document.querySelectorAll('.suggestion-chip').forEach(chip => {
     chip.addEventListener('click', () => {
       const prompt = chip.dataset.prompt;
-      if (state.workingDir) {
+      const chipMode = chip.dataset.mode || state.mode;
+
+      if (chipMode === 'chat' || state.workingDir) {
         elements.messageInput.value = prompt;
         showTaskScreen();
         if (!state.activeSessionId) createNewSession();
@@ -324,36 +417,30 @@ function bindEvents() {
     }
   });
 
-  // Model selector dropdown
-  elements.btnModelSelect.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const isOpen = elements.modelDropdown.style.display !== 'none';
-    elements.modelDropdown.style.display = isOpen ? 'none' : 'block';
-    if (!isOpen) updateModelDropdownActive();
-  });
-
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('.input-footer-left')) {
-      elements.modelDropdown.style.display = 'none';
-    }
-  });
-
-  elements.modelDropdown.addEventListener('click', (e) => {
-    const opt = e.target.closest('.model-option');
-    if (!opt) return;
-    const model = opt.dataset.model;
-    state.settings.model = model;
-    elements.settingModel.value = model;
-    updateModelSelectLabel();
+  // Model toggle (input footer)
+  elements.modelToggle.addEventListener('click', (e) => {
+    const btn = e.target.closest('.model-toggle-btn');
+    if (!btn) return;
+    state.settings.model = btn.dataset.model;
+    updateModelToggleUI();
     updateModelBadge();
-    elements.modelDropdown.style.display = 'none';
+    saveState();
+  });
+
+  // Model toggle (settings)
+  elements.settingModelToggle.addEventListener('click', (e) => {
+    const btn = e.target.closest('.setting-model-btn');
+    if (!btn) return;
+    state.settings.model = btn.dataset.model;
+    updateModelToggleUI();
+    updateModelBadge();
     saveState();
   });
 
   // Theme toggle
   elements.btnTheme.addEventListener('click', () => {
     state.theme = state.theme === 'dark' ? 'light' : 'dark';
-    localStorage.setItem('gemini-cowork-theme', state.theme);
+    localStorage.setItem('geminui-theme', state.theme);
     applyTheme();
   });
 
@@ -448,7 +535,8 @@ function createNewSession() {
 
   const session = {
     id: Date.now().toString(),
-    title: 'New Task',
+    title: state.mode === 'chat' ? 'New Chat' : 'New Task',
+    mode: state.mode,
     messages: [],
     isResume: false,
     archived: false
@@ -464,6 +552,10 @@ function createNewSession() {
 }
 
 function deleteSession(sessionId) {
+  const session = state.sessions.find(s => s.id === sessionId);
+  const title = session ? session.title : 'this session';
+  if (!confirm('Delete "' + title + '"?')) return;
+
   state.sessions = state.sessions.filter(s => s.id !== sessionId);
   if (state.activeSessionId === sessionId) {
     state.activeSessionId = state.sessions.length > 0 ? state.sessions[0].id : null;
@@ -499,7 +591,7 @@ function switchToSession(sessionId) {
 function renderSessions() {
   elements.sessionsList.textContent = '';
 
-  let filtered = state.sessions;
+  let filtered = state.sessions.filter(s => (s.mode || 'cowork') === state.mode);
 
   // Filter by active/archived
   if (state.sessionFilter === 'active') {
@@ -522,13 +614,19 @@ function renderSessions() {
     return;
   }
 
+  // Sort: pinned first, then by original order
+  filtered.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+
   filtered.forEach(session => {
-    const btn = createEl('button', `session-item${session.id === state.activeSessionId ? ' active' : ''}`);
+    const btn = createEl('button', `session-item${session.id === state.activeSessionId ? ' active' : ''}${session.pinned ? ' pinned' : ''}`);
     btn.dataset.id = session.id;
 
     const dot = createEl('span', 'session-dot');
+    if (session.pinned) dot.innerHTML = '<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M9.828.722a.5.5 0 01.354.146l4.95 4.95a.5.5 0 01-.707.707l-.71-.71-3.18 3.18a3.02 3.02 0 01-.38 3.306L8.5 14.06l-5.56-5.56 1.76-1.657a3.02 3.02 0 013.306-.38l3.18-3.18-.71-.71a.5.5 0 01.354-.854zM2.354 13.354l3-3-.707-.707-3 3a.5.5 0 00.707.707z"/></svg>';
     const label = createEl('span', 'session-label', session.title);
 
+    const pinBtn = createEl('span', 'session-pin', session.pinned ? '\u2716' : '\uD83D\uDCCC');
+    pinBtn.title = session.pinned ? 'Unpin' : 'Pin';
     const archiveBtn = createEl('span', 'session-archive', session.archived ? '\u21A9' : '\u2193');
     archiveBtn.title = session.archived ? 'Unarchive' : 'Archive';
     const deleteBtn = createEl('span', 'session-delete', '\u00d7');
@@ -536,6 +634,7 @@ function renderSessions() {
 
     btn.appendChild(dot);
     btn.appendChild(label);
+    btn.appendChild(pinBtn);
     btn.appendChild(archiveBtn);
     btn.appendChild(deleteBtn);
 
@@ -565,6 +664,10 @@ function renderSessions() {
     btn.addEventListener('click', (e) => {
       if (e.target.closest('.session-delete')) {
         deleteSession(session.id);
+      } else if (e.target.closest('.session-pin')) {
+        session.pinned = !session.pinned;
+        renderSessions();
+        saveState();
       } else if (e.target.closest('.session-archive')) {
         session.archived = !session.archived;
         renderSessions();
@@ -585,13 +688,16 @@ function renderSessions() {
 function showTaskScreen() {
   elements.welcomeScreen.classList.remove('active');
   elements.taskScreen.classList.add('active');
+  const folderHeader = document.getElementById('current-folder-display');
+  if (folderHeader) folderHeader.style.display = state.mode === 'chat' ? 'none' : '';
   updateFolderDisplay();
   updateModelBadge();
 }
 
 function updateModelBadge() {
-  const model = state.settings.model || 'Default';
-  elements.modelBadge.textContent = model === 'Default' ? 'Gemini' : model;
+  const model = state.settings.model;
+  const labels = { 'gemini-3-pro-preview': 'Pro', 'gemini-3-flash-preview': 'Flash' };
+  elements.modelBadge.textContent = labels[model] || model || 'Flash';
 }
 
 // ============================================
@@ -705,6 +811,20 @@ function removeThinkingIndicator() {
 let streamBuffer = '';
 let streamMessageEl = null;
 
+function sendFromWelcomeChat() {
+  const text = elements.welcomeChatTextarea.value.trim();
+  if (!text) return;
+
+  // Create session, switch to task screen, populate input, and send
+  createNewSession();
+  showTaskScreen();
+  elements.messageInput.value = text;
+  elements.welcomeChatTextarea.value = '';
+  elements.welcomeChatSend.disabled = true;
+  autoResizeTextarea(elements.welcomeChatTextarea);
+  sendMessage();
+}
+
 async function sendMessage() {
   const message = elements.messageInput.value.trim();
   if (!message || state.isStreaming) return;
@@ -714,7 +834,9 @@ async function sendMessage() {
   const session = state.sessions.find(s => s.id === state.activeSessionId);
   if (!session) return;
 
-  if (!state.workingDir) {
+  const isCowork = (state.mode === 'cowork');
+
+  if (isCowork && !state.workingDir) {
     await selectFolder();
     if (!state.workingDir) return;
   }
@@ -722,7 +844,7 @@ async function sendMessage() {
   let fullMessage = message;
   if (state.messageCount === 0) {
     let prefix = '';
-    if (state.folderInstructions) {
+    if (isCowork && state.folderInstructions) {
       prefix += `[Project Instructions from GEMINI.md]:\n${state.folderInstructions}\n\n`;
     }
     if (state.settings.instructions) {
@@ -789,7 +911,7 @@ async function sendMessage() {
   const options = {
     apiKey: state.settings.apiKey || undefined,
     model: state.settings.model || undefined,
-    approvalMode: state.settings.approvalMode || 'auto_edit',
+    approvalMode: state.settings.approvalMode || 'yolo',
     sandbox: state.settings.sandbox,
     subagents: state.settings.subagents,
     useACP: state.settings.useACP,
@@ -802,7 +924,7 @@ async function sendMessage() {
   try {
     await geminiAPI.sendMessage({
       message: fullMessage,
-      workingDir: state.workingDir,
+      workingDir: isCowork ? state.workingDir : null,
       options
     });
   } catch (err) {
@@ -916,11 +1038,23 @@ function handleStreamEvent(event) {
 
       const permBody = createEl('div', 'permission-body');
       permBody.appendChild(createEl('div', 'permission-tool-name', event.tool_name || 'Unknown tool'));
-      if (event.parameters) {
-        const paramSummary = typeof event.parameters === 'string'
-          ? event.parameters
-          : JSON.stringify(event.parameters, null, 2);
-        permBody.appendChild(createEl('pre', 'permission-params', paramSummary));
+      if (event.parameters && Array.isArray(event.parameters)) {
+        // Show human-readable summary of ACP tool content
+        for (const item of event.parameters) {
+          if (item.type === 'diff' && item.path) {
+            const label = item.oldText ? 'Edit' : 'Create';
+            permBody.appendChild(createEl('div', 'permission-file', label + ': ' + item.path));
+          } else if (item.type === 'text' && item.text) {
+            permBody.appendChild(createEl('div', 'permission-file', item.text));
+          } else if (item.path) {
+            permBody.appendChild(createEl('div', 'permission-file', item.path));
+          }
+        }
+      } else if (event.parameters && typeof event.parameters === 'object') {
+        const summary = event.parameters.command || event.parameters.file_path || event.parameters.path || '';
+        if (summary) {
+          permBody.appendChild(createEl('div', 'permission-file', summary));
+        }
       }
       promptEl.appendChild(permBody);
 
@@ -1023,7 +1157,7 @@ function handleStreamEvent(event) {
         // Desktop notification when window isn't focused
         if (!document.hasFocus()) {
           try {
-            new Notification('Gemini Cowork', {
+            new Notification('GeminUI', {
               body: 'Task completed',
               silent: false
             });
@@ -1040,7 +1174,7 @@ function handleStreamEvent(event) {
           );
         } else if (errText.includes('GEMINI_API_KEY') || errText.includes('API key')) {
           appendStatusMessage('Invalid API key. Check your API key in Settings.', 'error');
-        } else if (errText.includes('not found') || errText.includes('ENOENT')) {
+        } else if (errText.includes('ENOENT') || errText.includes('is not recognized')) {
           appendStatusMessage('Gemini CLI not found. Install it: npm i -g @google/gemini-cli', 'error');
         } else {
           appendStatusMessage('Gemini process failed (exit code ' + event.code + '). Check Settings or try again.', 'error');
@@ -1094,15 +1228,20 @@ function updateAuthStatus(authType) {
 // Settings
 // ============================================
 
-function applySettings() {
+async function applySettings() {
   elements.settingApiKey.value = state.settings.apiKey;
-  elements.settingModel.value = state.settings.model;
   elements.settingApproval.value = state.settings.approvalMode;
   elements.settingSandbox.checked = state.settings.sandbox;
   elements.settingSubagents.checked = state.settings.subagents;
   elements.settingACP.checked = state.settings.useACP;
   elements.settingInstructions.value = state.settings.instructions;
-  updateModelSelectLabel();
+  updateModelToggleUI();
+
+  // Load app-level settings from main process
+  elements.settingAutoLaunch.checked = await geminiAPI.getAutoLaunch();
+  elements.settingTray.checked = state.settings.minimizeToTray;
+  // Sync tray state to main process on startup
+  geminiAPI.setMinimizeToTray(state.settings.minimizeToTray);
 }
 
 // ============================================
@@ -1137,27 +1276,15 @@ function renderAttachedFiles() {
 // Model Selector
 // ============================================
 
-function updateModelSelectLabel() {
+function updateModelToggleUI() {
   const model = state.settings.model;
-  if (!model) {
-    elements.modelSelectLabel.textContent = 'Auto';
-  } else {
-    // Shorten the label
-    const labels = {
-      'gemini-3.1-pro-preview': '3.1 Pro',
-      'gemini-3.0-flash': '3 Flash',
-      'gemini-3.1-flash-lite': '3.1 Flash Lite',
-      'gemini-2.5-pro': '2.5 Pro',
-      'gemini-2.5-flash': '2.5 Flash',
-      'gemini-2.0-flash': '2.0 Flash'
-    };
-    elements.modelSelectLabel.textContent = labels[model] || model;
-  }
-}
-
-function updateModelDropdownActive() {
-  elements.modelDropdown.querySelectorAll('.model-option').forEach(opt => {
-    opt.classList.toggle('active', opt.dataset.model === (state.settings.model || ''));
+  // Input footer toggle
+  elements.modelToggle.querySelectorAll('.model-toggle-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.model === model);
+  });
+  // Settings toggle
+  elements.settingModelToggle.querySelectorAll('.setting-model-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.model === model);
   });
 }
 
@@ -1167,7 +1294,7 @@ async function saveSettings() {
   const oldACP = state.settings.useACP;
 
   state.settings.apiKey = elements.settingApiKey.value.trim();
-  state.settings.model = elements.settingModel.value;
+  // model is set directly by toggle click, no need to read from element
   state.settings.approvalMode = elements.settingApproval.value;
   state.settings.sandbox = elements.settingSandbox.checked;
   state.settings.subagents = elements.settingSubagents.checked;
@@ -1192,6 +1319,11 @@ async function saveSettings() {
   if (state.settings.useACP !== oldACP) {
     geminiAPI.cancel();
   }
+
+  // App-level settings (startup, tray)
+  state.settings.minimizeToTray = elements.settingTray.checked;
+  geminiAPI.setAutoLaunch(elements.settingAutoLaunch.checked);
+  geminiAPI.setMinimizeToTray(elements.settingTray.checked);
 
   checkAuthStatus();
 }

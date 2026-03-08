@@ -1,8 +1,8 @@
-# Claude Cowork vs Gemini Cowork — Feature Comparison
+# Claude Cowork vs GeminUI — Feature Comparison
 
 ## Feature Matrix
 
-| Feature | Claude Cowork | Gemini Cowork | Status |
+| Feature | Claude Cowork | GeminUI | Status |
 |---|---|---|---|
 | **Core** | | | |
 | Desktop app (Electron/native) | Yes | Yes | Done |

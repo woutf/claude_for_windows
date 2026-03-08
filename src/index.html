@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:;">
-  <title>Gemini Cowork</title>
+  <title>GeminUI</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Google+Sans+Mono:wght@400;500&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -25,9 +25,13 @@
           </defs>
           <path d="M14 0C14 7.732 7.732 14 0 14c7.732 0 14 6.268 14 14 0-7.732 6.268-14 14-14C20.268 14 14 7.732 14 0z" fill="url(#gemini-grad)"/>
         </svg>
-        <span class="titlebar-title">Gemini Cowork</span>
       </div>
     </div>
+    <div class="mode-toggle" id="mode-toggle">
+      <button class="mode-btn active" data-mode="chat">Chat</button>
+      <button class="mode-btn" data-mode="cowork">Cowork</button>
+    </div>
+    <div class="titlebar-drag titlebar-drag-right"></div>
     <div class="titlebar-controls">
       <button id="btn-minimize" class="titlebar-btn" aria-label="Minimize">
         <svg width="12" height="12" viewBox="0 0 12 12"><rect y="5" width="12" height="1.5" rx="0.75" fill="currentColor"/></svg>
@@ -46,7 +50,7 @@
     <aside id="sidebar">
       <button id="btn-new-task" class="sidebar-btn-primary">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        New Task
+        <span id="btn-new-task-label">New Chat</span>
       </button>
 
       <div class="sidebar-section">
@@ -96,8 +100,8 @@
               <path d="M14 0C14 7.732 7.732 14 0 14c7.732 0 14 6.268 14 14 0-7.732 6.268-14 14-14C20.268 14 14 7.732 14 0z" fill="url(#gemini-grad-lg)"/>
             </svg>
           </div>
-          <h1 class="welcome-title">Welcome to Gemini Cowork</h1>
-          <p class="welcome-subtitle">Your AI desktop assistant powered by Gemini</p>
+          <h1 class="welcome-title" id="welcome-title">Welcome to GeminUI</h1>
+          <p class="welcome-subtitle" id="welcome-subtitle">Your AI desktop assistant powered by Gemini</p>
 
           <div id="setup-check" class="setup-section">
             <div class="setup-item" id="setup-gemini">
@@ -106,20 +110,35 @@
             </div>
           </div>
 
-          <div class="welcome-actions">
+          <div class="welcome-actions" id="welcome-actions-cowork">
             <button id="btn-select-folder" class="btn-primary">
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M2 5a2 2 0 012-2h4l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V5z" stroke="currentColor" stroke-width="1.5"/></svg>
               Select Working Folder
             </button>
           </div>
 
-          <div class="welcome-suggestions">
+          <div class="welcome-suggestions" id="welcome-suggestions-cowork">
             <p class="suggestions-label">Try asking Gemini to:</p>
             <div class="suggestion-chips">
-              <button class="suggestion-chip" data-prompt="Organize and rename all files in this folder by type and date">Organize files by type</button>
-              <button class="suggestion-chip" data-prompt="Summarize all documents in this folder and create a summary.md">Summarize all documents</button>
-              <button class="suggestion-chip" data-prompt="Find and list all TODO items across files in this project">Find all TODOs</button>
-              <button class="suggestion-chip" data-prompt="Review the code in this project and suggest improvements">Review code quality</button>
+              <button class="suggestion-chip" data-prompt="Organize and rename all files in this folder by type and date" data-mode="cowork">Organize files by type</button>
+              <button class="suggestion-chip" data-prompt="Summarize all documents in this folder and create a summary.md" data-mode="cowork">Summarize all documents</button>
+              <button class="suggestion-chip" data-prompt="Find and list all TODO items across files in this project" data-mode="cowork">Find all TODOs</button>
+              <button class="suggestion-chip" data-prompt="Review the code in this project and suggest improvements" data-mode="cowork">Review code quality</button>
+            </div>
+          </div>
+
+          <div id="welcome-chat-input" class="welcome-chat-input" style="display:none;">
+            <div class="welcome-input-wrapper">
+              <textarea id="welcome-chat-textarea" placeholder="How can I help you today?" rows="1"></textarea>
+              <button id="welcome-chat-send" class="btn-send" disabled>
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3.5 17L5 10.5 3.5 3 18 10 3.5 17z" fill="currentColor"/><path d="M5 10.5H14" stroke="white" stroke-width="1.5"/></svg>
+              </button>
+            </div>
+            <div class="welcome-chat-chips">
+              <button class="suggestion-chip" data-prompt="Explain quantum computing in simple terms" data-mode="chat">Explain quantum computing</button>
+              <button class="suggestion-chip" data-prompt="Write a Python script that converts CSV to JSON" data-mode="chat">CSV to JSON script</button>
+              <button class="suggestion-chip" data-prompt="What are the best practices for REST API design?" data-mode="chat">REST API best practices</button>
+              <button class="suggestion-chip" data-prompt="Help me write a professional email to decline a meeting" data-mode="chat">Write a professional email</button>
             </div>
           </div>
         </div>
@@ -162,23 +181,10 @@
           </div>
           <div class="input-footer">
             <div class="input-footer-left">
-              <button id="btn-model-select" class="model-select-btn">
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1C6 4.866 3.866 7 0 7c3.866 0 7 2.134 7 6 0-3.866 2.134-7 6-7-3.866 0-7-3.134-7-6z" fill="currentColor" opacity="0.5"/></svg>
-                <span id="model-select-label">Auto</span>
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 4L5 6.5 7.5 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </button>
-              <div id="model-dropdown" class="model-dropdown" style="display:none;">
-                <div class="model-dropdown-group">Gemini 3</div>
-                <button class="model-option" data-model="gemini-3.1-pro-preview">3.1 Pro (Preview)</button>
-                <button class="model-option" data-model="gemini-3.0-flash">3 Flash</button>
-                <button class="model-option" data-model="gemini-3.1-flash-lite">3.1 Flash Lite</button>
-                <div class="model-dropdown-group">Gemini 2.5</div>
-                <button class="model-option" data-model="gemini-2.5-pro">2.5 Pro</button>
-                <button class="model-option" data-model="gemini-2.5-flash">2.5 Flash</button>
-                <div class="model-dropdown-group">Gemini 2</div>
-                <button class="model-option" data-model="gemini-2.0-flash">2.0 Flash</button>
-                <div class="model-dropdown-divider"></div>
-                <button class="model-option" data-model="">Auto (Default)</button>
+              <div class="model-toggle" id="model-toggle">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1C6 4.866 3.866 7 0 7c3.866 0 7 2.134 7 6 0-3.866 2.134-7 6-7-3.866 0-7-3.134-7-6z" fill="currentColor" opacity="0.4"/></svg>
+                <button class="model-toggle-btn active" data-model="gemini-3-flash-preview">Flash</button>
+                <button class="model-toggle-btn" data-model="gemini-3-pro-preview">Pro</button>
               </div>
             </div>
             <span class="input-hint">Enter to send, Shift+Enter for new line</span>
@@ -232,22 +238,11 @@
 
         <div class="setting-group">
           <label class="setting-label">Model</label>
-          <select id="setting-model" class="setting-input">
-            <option value="">Auto (Default)</option>
-            <optgroup label="Gemini 3">
-              <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Preview)</option>
-              <option value="gemini-3.0-flash">Gemini 3 Flash</option>
-              <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
-            </optgroup>
-            <optgroup label="Gemini 2.5">
-              <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-              <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-            </optgroup>
-            <optgroup label="Gemini 2">
-              <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-            </optgroup>
-          </select>
-          <p class="setting-hint">Select which Gemini model to use</p>
+          <div class="setting-model-toggle" id="setting-model-toggle">
+            <button class="setting-model-btn active" data-model="gemini-3-flash-preview">Flash</button>
+            <button class="setting-model-btn" data-model="gemini-3-pro-preview">Pro</button>
+          </div>
+          <p class="setting-hint">Flash is fast and free. Pro is slower but more capable.</p>
         </div>
 
         <div class="setting-group">
@@ -282,10 +277,28 @@
         <div class="setting-group">
           <label class="setting-label">ACP Mode</label>
           <label class="toggle">
-            <input type="checkbox" id="setting-acp" checked>
+            <input type="checkbox" id="setting-acp">
             <span class="toggle-slider"></span>
           </label>
           <p class="setting-hint">Enable bidirectional communication with inline permission prompts</p>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Launch on Startup</label>
+          <label class="toggle">
+            <input type="checkbox" id="setting-autolaunch">
+            <span class="toggle-slider"></span>
+          </label>
+          <p class="setting-hint">Automatically start GeminUI when you log in to Windows</p>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Minimize to Tray</label>
+          <label class="toggle">
+            <input type="checkbox" id="setting-tray">
+            <span class="toggle-slider"></span>
+          </label>
+          <p class="setting-hint">Keep GeminUI running in the system tray when the window is closed</p>
         </div>
 
         <div class="setting-group">
