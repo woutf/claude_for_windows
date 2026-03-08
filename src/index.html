@@ -72,6 +72,10 @@
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 10a2 2 0 100-4 2 2 0 000 4z" stroke="currentColor" stroke-width="1.5"/><path d="M13.5 8c0-.3-.2-.6-.4-.8l1-1.6-.8-1.4-1.8.4c-.4-.3-.8-.6-1.3-.7L9.8 2H8.2l-.4 1.9c-.5.1-.9.4-1.3.7l-1.8-.4-.8 1.4 1 1.6c-.2.2-.4.5-.4.8s.2.6.4.8l-1 1.6.8 1.4 1.8-.4c.4.3.8.6 1.3.7L8.2 14h1.6l.4-1.9c.5-.1.9-.4 1.3-.7l1.8.4.8-1.4-1-1.6c.2-.2.4-.5.4-.8z" stroke="currentColor" stroke-width="1.5"/></svg>
           Settings
         </button>
+        <button id="btn-extensions" class="sidebar-btn">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 2.5a1.5 1.5 0 013 0V4h2.5A1.5 1.5 0 0113 5.5V8h-1.5a1.5 1.5 0 000 3H13v2.5a1.5 1.5 0 01-1.5 1.5H9v-1.5a1.5 1.5 0 00-3 0V15H3.5A1.5 1.5 0 012 13.5V11h1.5a1.5 1.5 0 000-3H2V5.5A1.5 1.5 0 013.5 4H6V2.5z" stroke="currentColor" stroke-width="1.2"/></svg>
+          Extensions
+        </button>
       </div>
     </aside>
 
@@ -267,9 +271,45 @@
         </div>
 
         <div class="setting-group">
+          <label class="setting-label">Enable Subagents (experimental)</label>
+          <label class="toggle">
+            <input type="checkbox" id="setting-subagents">
+            <span class="toggle-slider"></span>
+          </label>
+          <p class="setting-hint">Allows Gemini to spawn sub-agents for parallel tasks</p>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">ACP Mode</label>
+          <label class="toggle">
+            <input type="checkbox" id="setting-acp" checked>
+            <span class="toggle-slider"></span>
+          </label>
+          <p class="setting-hint">Enable bidirectional communication with inline permission prompts</p>
+        </div>
+
+        <div class="setting-group">
           <label class="setting-label">Global Instructions</label>
           <textarea id="setting-instructions" class="setting-textarea" rows="4" placeholder="Add instructions that apply to every Gemini session..."></textarea>
           <p class="setting-hint">These instructions are prepended to every message you send</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Extensions Modal -->
+  <div id="extensions-modal" class="modal-overlay">
+    <div class="modal extensions-modal-wide">
+      <div class="modal-header">
+        <h2>Extensions</h2>
+        <button id="btn-close-extensions" class="btn-ghost btn-icon">
+          <svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <input type="text" id="extension-search" class="setting-input" placeholder="Search extensions..." style="width:100%;">
+        <div id="extensions-grid" class="extensions-grid">
+          <div class="extensions-loading">Loading extensions...</div>
         </div>
       </div>
     </div>

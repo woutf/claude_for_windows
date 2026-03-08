@@ -13,6 +13,11 @@ if (process.argv.includes('--dev')) {
 
 let mainWindow;
 let activeProcess = null;
+let acpProcess = null;
+let acpMessageId = 1;
+let acpSessionId = null;
+let acpPendingResolves = {};
+let acpPermissionRequestIds = {};
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -50,6 +55,9 @@ function createWindow() {
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
+  if (acpProcess) {
+    acpProcess.kill();
+  }
   if (activeProcess) {
     activeProcess.kill();
   }
@@ -140,9 +148,205 @@ ipcMain.handle('gemini:checkInstalled', async () => {
   });
 });
 
+// ACP helpers: send JSON-RPC request and wait for response
+function sendACPRequest(method, params) {
+  return new Promise((resolve, reject) => {
+    if (!acpProcess || !acpProcess.stdin.writable) {
+      return reject(new Error('ACP process not running'));
+    }
+    const id = acpMessageId++;
+    acpPendingResolves[id] = { resolve, reject };
+    acpProcess.stdin.write(JSON.stringify({
+      jsonrpc: '2.0', method, id, params
+    }) + '\n');
+  });
+}
+
+// Handle a parsed JSON-RPC message from ACP stdout
+function handleACPMessage(msg) {
+  // JSON-RPC response to our request (has id, no method)
+  if (msg.id !== undefined && !msg.method) {
+    const pending = acpPendingResolves[msg.id];
+    if (pending) {
+      delete acpPendingResolves[msg.id];
+      if (msg.error) {
+        pending.reject(new Error(msg.error.message || 'ACP error'));
+      } else {
+        pending.resolve(msg.result);
+      }
+    }
+    return;
+  }
+
+  // Notification: session/update
+  if (msg.method === 'session/update' && msg.params) {
+    const update = msg.params.update;
+    if (!update) return;
+
+    switch (update.sessionUpdate) {
+      case 'agent_message_chunk':
+        if (update.content && update.content.text) {
+          mainWindow.webContents.send('gemini:stream', {
+            type: 'message', role: 'assistant', content: update.content.text
+          });
+        }
+        break;
+      case 'agent_thought_chunk':
+        if (update.content && update.content.text) {
+          mainWindow.webContents.send('gemini:stream', {
+            type: 'message', role: 'assistant', content: update.content.text
+          });
+        }
+        break;
+      case 'tool_call':
+        mainWindow.webContents.send('gemini:stream', {
+          type: 'tool_use',
+          tool_id: update.toolCallId,
+          tool_name: update.title || update.kind || 'tool',
+          parameters: update.content ? { detail: update.content } : {}
+        });
+        break;
+      case 'tool_call_update':
+        if (update.status === 'completed' || update.status === 'error') {
+          mainWindow.webContents.send('gemini:stream', {
+            type: 'tool_result',
+            tool_id: update.toolCallId,
+            status: update.status === 'completed' ? 'success' : 'error',
+            output: update.content ? JSON.stringify(update.content) : ''
+          });
+        }
+        break;
+    }
+    return;
+  }
+
+  // Agent request: client/requestPermission
+  if (msg.method === 'client/requestPermission' && msg.params) {
+    const { toolCall, options } = msg.params;
+    acpPermissionRequestIds[toolCall.toolCallId] = msg.id;
+    mainWindow.webContents.send('gemini:stream', {
+      type: 'permission_request',
+      tool_id: toolCall.toolCallId,
+      tool_name: toolCall.title || toolCall.kind || 'tool',
+      parameters: toolCall.content,
+      options: options
+    });
+    return;
+  }
+}
+
+// ACP mode: spawn long-lived process with bidirectional JSON-RPC
+async function spawnACPProcess(workingDir, options) {
+  const cmdParts = ['gemini', '--experimental-acp'];
+  if (options.model) cmdParts.push('-m', options.model);
+  if (options.sandbox) cmdParts.push('-s');
+
+  const env = { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' };
+  if (options.apiKey) env.GEMINI_API_KEY = options.apiKey;
+
+  acpProcess = spawn(cmdParts[0], cmdParts.slice(1), {
+    cwd: workingDir || undefined,
+    shell: true,
+    env
+  });
+
+  let lineBuffer = '';
+  acpProcess.stdout.on('data', (data) => {
+    lineBuffer += data.toString();
+    const lines = lineBuffer.split('\n');
+    lineBuffer = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line);
+        handleACPMessage(msg);
+      } catch (e) {
+        mainWindow.webContents.send('gemini:stream', { type: 'text', content: line });
+      }
+    }
+  });
+
+  acpProcess.stderr.on('data', () => {});
+
+  acpProcess.on('close', (code) => {
+    acpProcess = null;
+    acpSessionId = null;
+    acpMessageId = 1;
+    acpPendingResolves = {};
+    acpPermissionRequestIds = {};
+    mainWindow.webContents.send('gemini:stream', { type: 'done', code, error: 'ACP process exited' });
+  });
+
+  acpProcess.on('error', (err) => {
+    acpProcess = null;
+    acpSessionId = null;
+    acpMessageId = 1;
+    acpPendingResolves = {};
+    acpPermissionRequestIds = {};
+    mainWindow.webContents.send('gemini:stream', { type: 'error', content: err.message });
+  });
+
+  // Initialize with correct ACP protocol
+  await sendACPRequest('initialize', {
+    protocolVersion: 1,
+    clientCapabilities: {
+      fs: { readTextFile: false, writeTextFile: false },
+      terminal: false
+    },
+    clientInfo: { name: 'gemini-cowork', version: '1.0.0' }
+  });
+
+  // Create session
+  const sessionResult = await sendACPRequest('session/new', {
+    cwd: workingDir || process.cwd(),
+    mcpServers: []
+  });
+  acpSessionId = sessionResult.sessionId;
+}
+
 // Send message to Gemini CLI
 ipcMain.handle('gemini:sendMessage', async (event, { message, workingDir, options }) => {
-  // Kill any existing process
+  // ACP mode: bidirectional communication via stdin/stdout
+  if (options.useACP) {
+    try {
+      if (!acpProcess) {
+        await spawnACPProcess(workingDir, options);
+      }
+
+      const promptContent = [];
+      if (options.imageAttachments && options.imageAttachments.length > 0) {
+        promptContent.push({ type: 'text', text: message });
+        for (const img of options.imageAttachments) {
+          promptContent.push({
+            type: 'image',
+            data: img.data,
+            mimeType: img.mediaType
+          });
+        }
+      } else {
+        promptContent.push({ type: 'text', text: message });
+      }
+
+      // Send prompt — don't await; responses stream via session/update notifications
+      sendACPRequest('session/prompt', {
+        sessionId: acpSessionId,
+        prompt: promptContent
+      }).then(() => {
+        // session/prompt resolves when the turn is complete
+        mainWindow.webContents.send('gemini:stream', { type: 'result', stats: {} });
+        mainWindow.webContents.send('gemini:stream', { type: 'done', code: 0, error: '' });
+      }).catch((err) => {
+        mainWindow.webContents.send('gemini:stream', { type: 'error', content: err.message });
+        mainWindow.webContents.send('gemini:stream', { type: 'done', code: 1, error: err.message });
+      });
+
+      return { output: '', error: '', code: 0 };
+    } catch (err) {
+      return { output: '', error: err.message, code: 1 };
+    }
+  }
+
+  // Non-ACP mode: kill any existing process
   if (activeProcess) {
     activeProcess.kill();
     activeProcess = null;
@@ -160,8 +364,10 @@ ipcMain.handle('gemini:sendMessage', async (event, { message, workingDir, option
   // Use structured JSON output for reliable parsing
   cmdParts.push('-o', 'stream-json');
 
-  // Skip MCP servers to reduce startup time (~15s faster)
-  cmdParts.push('--allowed-mcp-server-names', 'none');
+  // Skip MCP servers to reduce startup time (~15s faster), unless subagents need them
+  if (!options.subagents) {
+    cmdParts.push('--allowed-mcp-server-names', 'none');
+  }
 
   // Resume previous session for follow-up messages
   if (options.sessionIndex != null) {
@@ -257,6 +463,15 @@ ipcMain.handle('gemini:sendMessage', async (event, { message, workingDir, option
 
 // Cancel active Gemini process
 ipcMain.handle('gemini:cancel', () => {
+  if (acpProcess) {
+    acpProcess.kill('SIGTERM');
+    acpProcess = null;
+    acpSessionId = null;
+    acpMessageId = 1;
+    acpPendingResolves = {};
+    acpPermissionRequestIds = {};
+    return true;
+  }
   if (activeProcess) {
     activeProcess.kill('SIGTERM');
     activeProcess = null;
@@ -382,4 +597,133 @@ ipcMain.handle('files:cleanAttachments', async (_, workingDir) => {
   } catch (e) {
     console.error('Failed to clean attachments:', e);
   }
+});
+
+// Read file as base64 (for ACP image attachments)
+ipcMain.handle('files:readAsBase64', async (_, filePath) => {
+  try {
+    const ext = path.extname(filePath).toLowerCase();
+    const mediaTypes = {
+      '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp'
+    };
+    const mediaType = mediaTypes[ext];
+    if (!mediaType) return null;
+    const data = fs.readFileSync(filePath).toString('base64');
+    return { data, mediaType };
+  } catch (e) {
+    return null;
+  }
+});
+
+// Get subagents setting from ~/.gemini/settings.json
+ipcMain.handle('gemini:getSubagents', async () => {
+  try {
+    if (fs.existsSync(GEMINI_SETTINGS_PATH)) {
+      const settings = JSON.parse(fs.readFileSync(GEMINI_SETTINGS_PATH, 'utf-8'));
+      return settings?.experimental?.enableAgents || false;
+    }
+  } catch (e) { /* ignore */ }
+  return false;
+});
+
+// Set subagents setting in ~/.gemini/settings.json
+ipcMain.handle('gemini:setSubagents', async (_, enabled) => {
+  try {
+    let settings = {};
+    if (fs.existsSync(GEMINI_SETTINGS_PATH)) {
+      settings = JSON.parse(fs.readFileSync(GEMINI_SETTINGS_PATH, 'utf-8'));
+    }
+    if (!settings.experimental) settings.experimental = {};
+    settings.experimental.enableAgents = enabled;
+    fs.writeFileSync(GEMINI_SETTINGS_PATH, JSON.stringify(settings, null, 2));
+    return true;
+  } catch (e) {
+    console.error('Failed to update subagents setting:', e);
+    return false;
+  }
+});
+
+// ACP permission response — respond to agent's client/requestPermission request
+ipcMain.handle('gemini:respondPermission', (_, { toolId, outcome }) => {
+  if (!acpProcess || !acpProcess.stdin.writable) return false;
+
+  const requestId = acpPermissionRequestIds[toolId];
+  if (requestId === undefined) return false;
+  delete acpPermissionRequestIds[toolId];
+
+  let acpOutcome;
+  if (outcome === 'denied') {
+    acpOutcome = { outcome: 'cancelled' };
+  } else {
+    const optionId = outcome === 'approved_for_session' ? 'proceed_always' : 'proceed_once';
+    acpOutcome = { outcome: 'selected', optionId };
+  }
+
+  acpProcess.stdin.write(JSON.stringify({
+    jsonrpc: '2.0', id: requestId,
+    result: { outcome: acpOutcome }
+  }) + '\n');
+  return true;
+});
+
+// Extension management
+let extensionsCache = null;
+let extensionsCacheTime = 0;
+
+ipcMain.handle('gemini:fetchExtensions', async () => {
+  if (extensionsCache && (Date.now() - extensionsCacheTime) < 300000) {
+    return extensionsCache;
+  }
+  try {
+    const response = await fetch('https://geminicli.com/extensions.json');
+    extensionsCache = await response.json();
+    extensionsCacheTime = Date.now();
+    return extensionsCache;
+  } catch (e) {
+    console.error('Failed to fetch extensions:', e);
+    return null;
+  }
+});
+
+ipcMain.handle('gemini:installExtension', async (_, name) => {
+  return new Promise((resolve) => {
+    const proc = spawn('gemini', ['extension', 'install', name], {
+      shell: true,
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' }
+    });
+    let output = '';
+    proc.stdout.on('data', (d) => { output += d.toString(); });
+    proc.stderr.on('data', (d) => { output += d.toString(); });
+    proc.on('close', (code) => resolve({ output, code }));
+    proc.on('error', (err) => resolve({ output: err.message, code: 1 }));
+  });
+});
+
+ipcMain.handle('gemini:uninstallExtension', async (_, name) => {
+  return new Promise((resolve) => {
+    const proc = spawn('gemini', ['extension', 'uninstall', name], {
+      shell: true,
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' }
+    });
+    let output = '';
+    proc.stdout.on('data', (d) => { output += d.toString(); });
+    proc.stderr.on('data', (d) => { output += d.toString(); });
+    proc.on('close', (code) => resolve({ output, code }));
+    proc.on('error', (err) => resolve({ output: err.message, code: 1 }));
+  });
+});
+
+ipcMain.handle('gemini:listInstalledExtensions', async () => {
+  return new Promise((resolve) => {
+    const proc = spawn('gemini', ['extension', 'list'], {
+      shell: true,
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' }
+    });
+    let output = '';
+    proc.stdout.on('data', (d) => { output += d.toString(); });
+    proc.stderr.on('data', (d) => { output += d.toString(); });
+    proc.on('close', () => resolve(output.trim()));
+    proc.on('error', () => resolve(''));
+  });
 });

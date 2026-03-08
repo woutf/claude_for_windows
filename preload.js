@@ -44,6 +44,22 @@ contextBridge.exposeInMainWorld('geminiAPI', {
   copyToWorkDir: (files, workingDir) => ipcRenderer.invoke('files:copyToWorkDir', { files, workingDir }),
   cleanAttachments: (workingDir) => ipcRenderer.invoke('files:cleanAttachments', workingDir),
 
+  // Subagents
+  setSubagents: (enabled) => ipcRenderer.invoke('gemini:setSubagents', enabled),
+  getSubagents: () => ipcRenderer.invoke('gemini:getSubagents'),
+
+  // Extensions
+  fetchExtensions: () => ipcRenderer.invoke('gemini:fetchExtensions'),
+  installExtension: (name) => ipcRenderer.invoke('gemini:installExtension', name),
+  uninstallExtension: (name) => ipcRenderer.invoke('gemini:uninstallExtension', name),
+  listInstalledExtensions: () => ipcRenderer.invoke('gemini:listInstalledExtensions'),
+
+  // ACP mode
+  respondPermission: (toolId, outcome) => ipcRenderer.invoke('gemini:respondPermission', { toolId, outcome }),
+
+  // File utilities
+  readFileBase64: (filePath) => ipcRenderer.invoke('files:readAsBase64', filePath),
+
   // Markdown parsing (sanitized)
   parseMarkdown: (text) => DOMPurify.sanitize(marked.parse(text))
 });

@@ -16,6 +16,8 @@ const state = {
     model: '',
     approvalMode: 'auto_edit',
     sandbox: false,
+    subagents: false,
+    useACP: true,
     instructions: ''
   },
   geminiVersion: null,
@@ -98,13 +100,22 @@ const elements = {
   themeLabel: $('#theme-label'),
   themeIconLight: $('#theme-icon-light'),
   themeIconDark: $('#theme-icon-dark'),
-  sessionSearch: $('#session-search')
+  sessionSearch: $('#session-search'),
+  settingSubagents: $('#setting-subagents'),
+  settingACP: $('#setting-acp'),
+  btnExtensions: $('#btn-extensions'),
+  extensionsModal: $('#extensions-modal'),
+  btnCloseExtensions: $('#btn-close-extensions'),
+  extensionSearch: $('#extension-search'),
+  extensionsGrid: $('#extensions-grid')
 };
 
 // ============================================
 // Thinking timer
 let thinkingStartTime = null;
 let thinkingInterval = null;
+let extensionsData = null;
+let installedExtensions = new Set();
 
 // Safe DOM helpers
 // ============================================
@@ -147,6 +158,13 @@ async function init() {
   }
 
   checkAuthStatus();
+
+  // Load subagents setting from Gemini CLI config
+  try {
+    const subagentsEnabled = await geminiAPI.getSubagents();
+    state.settings.subagents = subagentsEnabled;
+    elements.settingSubagents.checked = subagentsEnabled;
+  } catch (e) { /* ignore */ }
 
   if (state.workingDir) {
     updateFolderDisplay();
@@ -192,10 +210,24 @@ function bindEvents() {
     }
   });
 
+  // Extensions modal
+  elements.btnExtensions.addEventListener('click', openExtensionsModal);
+  elements.btnCloseExtensions.addEventListener('click', () => {
+    elements.extensionsModal.classList.remove('active');
+  });
+  elements.extensionsModal.addEventListener('click', (e) => {
+    if (e.target === elements.extensionsModal) {
+      elements.extensionsModal.classList.remove('active');
+    }
+  });
+  elements.extensionSearch.addEventListener('input', renderExtensions);
+
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      if (elements.settingsModal.classList.contains('active')) {
+      if (elements.extensionsModal.classList.contains('active')) {
+        elements.extensionsModal.classList.remove('active');
+      } else if (elements.settingsModal.classList.contains('active')) {
         elements.settingsModal.classList.remove('active');
         saveSettings();
       }
@@ -411,6 +443,9 @@ function updateFolderDisplay() {
 // ============================================
 
 function createNewSession() {
+  // Kill ACP process when starting a new session
+  geminiAPI.cancel();
+
   const session = {
     id: Date.now().toString(),
     title: 'New Task',
@@ -696,16 +731,35 @@ async function sendMessage() {
     if (prefix) fullMessage = prefix + message;
   }
 
-  // Copy attached files into working directory and reference by relative path
+  // Handle attached files
   let copiedFiles = [];
+  let imageAttachments = [];
   if (state.attachedFiles.length > 0) {
-    copiedFiles = await geminiAPI.copyToWorkDir(state.attachedFiles, state.workingDir);
-    if (copiedFiles.length > 0) {
-      const refs = copiedFiles.map(f => {
-        const rel = '.gemini-attachments/' + f.filename;
-        return rel.includes(' ') ? `@"${rel}"` : `@${rel}`;
-      }).join(' ');
-      fullMessage += ' ' + refs;
+    let filesToCopy = state.attachedFiles;
+
+    // In ACP mode, send images as base64 for multimodal support
+    if (state.settings.useACP) {
+      const nonImageFiles = [];
+      for (const filePath of state.attachedFiles) {
+        const base64Data = await geminiAPI.readFileBase64(filePath);
+        if (base64Data) {
+          imageAttachments.push(base64Data);
+        } else {
+          nonImageFiles.push(filePath);
+        }
+      }
+      filesToCopy = nonImageFiles;
+    }
+
+    if (filesToCopy.length > 0) {
+      copiedFiles = await geminiAPI.copyToWorkDir(filesToCopy, state.workingDir);
+      if (copiedFiles.length > 0) {
+        const refs = copiedFiles.map(f => {
+          const rel = '.gemini-attachments/' + f.filename;
+          return rel.includes(' ') ? `@"${rel}"` : `@${rel}`;
+        }).join(' ');
+        fullMessage += ' ' + refs;
+      }
     }
   }
 
@@ -737,6 +791,9 @@ async function sendMessage() {
     model: state.settings.model || undefined,
     approvalMode: state.settings.approvalMode || 'auto_edit',
     sandbox: state.settings.sandbox,
+    subagents: state.settings.subagents,
+    useACP: state.settings.useACP,
+    imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
     resume: state.messageCount > 0
   };
 
@@ -842,6 +899,58 @@ function handleStreamEvent(event) {
       break;
     }
 
+    // ACP: permission request — render inline approval UI
+    case 'permission_request': {
+      removeThinkingIndicator();
+      if (!streamMessageEl) {
+        streamMessageEl = appendMessageToDOM('assistant', '');
+      }
+      const contentEl = streamMessageEl.querySelector('.message-content');
+      const promptEl = createEl('div', 'permission-prompt');
+      promptEl.id = 'permission-' + (event.tool_id || '');
+
+      const permHeader = createEl('div', 'permission-header');
+      permHeader.appendChild(createEl('span', null, '\u26A0'));
+      permHeader.appendChild(createEl('span', null, 'Permission Required'));
+      promptEl.appendChild(permHeader);
+
+      const permBody = createEl('div', 'permission-body');
+      permBody.appendChild(createEl('div', 'permission-tool-name', event.tool_name || 'Unknown tool'));
+      if (event.parameters) {
+        const paramSummary = typeof event.parameters === 'string'
+          ? event.parameters
+          : JSON.stringify(event.parameters, null, 2);
+        permBody.appendChild(createEl('pre', 'permission-params', paramSummary));
+      }
+      promptEl.appendChild(permBody);
+
+      const permActions = createEl('div', 'permission-actions');
+      const btnAllow = createEl('button', 'btn-permission btn-allow', 'Allow');
+      const btnAllowSession = createEl('button', 'btn-permission btn-allow-session', 'Allow for session');
+      const btnDeny = createEl('button', 'btn-permission btn-deny', 'Deny');
+
+      const respond = (outcome) => {
+        geminiAPI.respondPermission(event.tool_id, outcome);
+        promptEl.classList.add('resolved');
+        const outcomeEl = createEl('div', 'permission-outcome ' + (outcome === 'denied' ? 'denied' : 'approved'));
+        outcomeEl.textContent = outcome === 'approved' ? 'Allowed' : outcome === 'approved_for_session' ? 'Allowed for session' : 'Denied';
+        promptEl.appendChild(outcomeEl);
+      };
+
+      btnAllow.addEventListener('click', () => respond('approved'));
+      btnAllowSession.addEventListener('click', () => respond('approved_for_session'));
+      btnDeny.addEventListener('click', () => respond('denied'));
+
+      permActions.appendChild(btnAllow);
+      permActions.appendChild(btnAllowSession);
+      permActions.appendChild(btnDeny);
+      promptEl.appendChild(permActions);
+
+      contentEl.appendChild(promptEl);
+      scrollToBottom();
+      break;
+    }
+
     // stream-json: tool result
     case 'tool_result': {
       const toolEl = document.getElementById('tool-' + (event.tool_id || ''));
@@ -920,6 +1029,7 @@ function handleStreamEvent(event) {
             });
           } catch (e) { /* notifications may not be supported */ }
         }
+        streamBuffer = '';
       } else if (event.code !== 0) {
         const errText = event.error || '';
         if (errText.includes('IneligibleTier') || errText.includes('not eligible')) {
@@ -989,6 +1099,8 @@ function applySettings() {
   elements.settingModel.value = state.settings.model;
   elements.settingApproval.value = state.settings.approvalMode;
   elements.settingSandbox.checked = state.settings.sandbox;
+  elements.settingSubagents.checked = state.settings.subagents;
+  elements.settingACP.checked = state.settings.useACP;
   elements.settingInstructions.value = state.settings.instructions;
   updateModelSelectLabel();
 }
@@ -1051,10 +1163,15 @@ function updateModelDropdownActive() {
 
 async function saveSettings() {
   const oldApiKey = state.settings.apiKey;
+  const oldSubagents = state.settings.subagents;
+  const oldACP = state.settings.useACP;
+
   state.settings.apiKey = elements.settingApiKey.value.trim();
   state.settings.model = elements.settingModel.value;
   state.settings.approvalMode = elements.settingApproval.value;
   state.settings.sandbox = elements.settingSandbox.checked;
+  state.settings.subagents = elements.settingSubagents.checked;
+  state.settings.useACP = elements.settingACP.checked;
   state.settings.instructions = elements.settingInstructions.value;
   updateModelBadge();
   saveState();
@@ -1064,6 +1181,16 @@ async function saveSettings() {
     await geminiAPI.setAuthType('gemini-api-key');
   } else if (!state.settings.apiKey && oldApiKey) {
     await geminiAPI.setAuthType('oauth-personal');
+  }
+
+  // Persist subagents setting to ~/.gemini/settings.json
+  if (state.settings.subagents !== oldSubagents) {
+    await geminiAPI.setSubagents(state.settings.subagents);
+  }
+
+  // Kill ACP process if mode changed (will respawn on next message)
+  if (state.settings.useACP !== oldACP) {
+    geminiAPI.cancel();
   }
 
   checkAuthStatus();
@@ -1087,6 +1214,117 @@ function autoResizeTextarea(textarea) {
 function stripAnsi(text) {
   return text.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
              .replace(/\r/g, '');
+}
+
+// ============================================
+// Extensions
+// ============================================
+
+function showExtensionsMessage(className, text) {
+  const grid = elements.extensionsGrid;
+  grid.textContent = '';
+  grid.appendChild(createEl('div', className, text));
+}
+
+async function openExtensionsModal() {
+  elements.extensionsModal.classList.add('active');
+  showExtensionsMessage('extensions-loading', 'Loading extensions...');
+  try {
+    const [data, installedOutput] = await Promise.all([
+      geminiAPI.fetchExtensions(),
+      geminiAPI.listInstalledExtensions()
+    ]);
+    extensionsData = data;
+    parseInstalledExtensions(installedOutput);
+    renderExtensions();
+  } catch (e) {
+    showExtensionsMessage('extensions-error', 'Failed to load extensions');
+  }
+}
+
+function parseInstalledExtensions(output) {
+  installedExtensions = new Set();
+  if (!output) return;
+  const lines = output.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.startsWith('Installed') && !trimmed.startsWith('No ') && !trimmed.startsWith('\u2500')) {
+      const name = trimmed.split(/\s{2,}|\t/)[0].trim();
+      if (name && !name.includes(' ')) installedExtensions.add(name);
+    }
+  }
+}
+
+function renderExtensions() {
+  const grid = elements.extensionsGrid;
+  grid.textContent = '';
+
+  if (!extensionsData || !Array.isArray(extensionsData)) {
+    showExtensionsMessage('extensions-empty', 'No extensions available');
+    return;
+  }
+
+  const query = elements.extensionSearch.value.toLowerCase();
+  const filtered = extensionsData.filter(ext => {
+    const name = ext.extensionName || ext.name || '';
+    const desc = ext.extensionDescription || ext.description || '';
+    return !query || name.toLowerCase().includes(query) || desc.toLowerCase().includes(query);
+  });
+
+  if (filtered.length === 0) {
+    showExtensionsMessage('extensions-empty', 'No matching extensions');
+    return;
+  }
+
+  filtered.forEach(ext => {
+    const extName = ext.extensionName || ext.name || '';
+    const extDesc = ext.extensionDescription || ext.description || ext.repoDescription || '';
+    const extAuthor = ext.fullName || ext.author || '';
+
+    const card = createEl('div', 'extension-card');
+
+    const header = createEl('div', 'extension-card-header');
+    header.appendChild(createEl('div', 'extension-card-name', extName));
+    header.appendChild(createEl('div', 'extension-card-author', extAuthor ? 'by ' + extAuthor : ''));
+    card.appendChild(header);
+
+    card.appendChild(createEl('div', 'extension-card-desc', extDesc));
+
+    const badges = createEl('div', 'extension-card-badges');
+    if (ext.hasMCP) badges.appendChild(createEl('span', 'ext-badge ext-badge-mcp', 'MCP'));
+    if (ext.hasContext) badges.appendChild(createEl('span', 'ext-badge ext-badge-context', 'Context'));
+    if (ext.hasHooks) badges.appendChild(createEl('span', 'ext-badge ext-badge-hooks', 'Hooks'));
+    if (ext.hasSkills) badges.appendChild(createEl('span', 'ext-badge ext-badge-skills', 'Skills'));
+    card.appendChild(badges);
+
+    const footer = createEl('div', 'extension-card-footer');
+    if (ext.stars != null) {
+      footer.appendChild(createEl('span', 'extension-stars', '\u2605 ' + ext.stars));
+    }
+
+    const isInstalled = installedExtensions.has(extName);
+    const btn = createEl('button', isInstalled ? 'btn-ext-uninstall' : 'btn-ext-install', isInstalled ? 'Uninstall' : 'Install');
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = isInstalled ? 'Removing...' : 'Installing...';
+      try {
+        if (isInstalled) {
+          await geminiAPI.uninstallExtension(extName);
+          installedExtensions.delete(extName);
+        } else {
+          await geminiAPI.installExtension(extName);
+          installedExtensions.add(extName);
+        }
+      } catch (e) {
+        console.error('Extension operation failed:', e);
+      }
+      renderExtensions();
+    });
+    footer.appendChild(btn);
+
+    card.appendChild(footer);
+    grid.appendChild(card);
+  });
 }
 
 // ============================================
