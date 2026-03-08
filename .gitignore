@@ -1,0 +1,5 @@
+node_modules/
+dist/
+out/
+*.png
+!src/icon.png

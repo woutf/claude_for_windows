@@ -1,0 +1,51 @@
+{
+  "name": "gemini-cowork",
+  "version": "1.0.0",
+  "description": "Gemini Cowork - AI Desktop Assistant powered by Gemini CLI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder --win",
+    "dist": "electron-builder --win --publish never"
+  },
+  "author": "Gemini Cowork",
+  "license": "MIT",
+  "dependencies": {
+    "dompurify": "^3.2.0",
+    "marked": "^15.0.0"
+  },
+  "devDependencies": {
+    "electron": "^34.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.gemini.cowork",
+    "productName": "Gemini Cowork",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
