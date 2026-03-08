@@ -6,6 +6,11 @@ const { spawn } = require('child_process');
 
 const GEMINI_SETTINGS_PATH = path.join(os.homedir(), '.gemini', 'settings.json');
 
+// Enable CDP remote debugging for Playwright/automation (Electron 30+ requires this approach)
+if (process.argv.includes('--dev')) {
+  app.commandLine.appendSwitch('remote-debugging-port', '9222');
+}
+
 let mainWindow;
 let activeProcess = null;
 
@@ -90,6 +95,17 @@ ipcMain.handle('shell:openFolder', async (_, pathOrUrl) => {
   } else {
     shell.openPath(pathOrUrl);
   }
+});
+
+// Read folder-specific instructions (GEMINI.md)
+ipcMain.handle('gemini:readFolderInstructions', async (_, workingDir) => {
+  try {
+    const filePath = path.join(workingDir, 'GEMINI.md');
+    if (fs.existsSync(filePath)) {
+      return fs.readFileSync(filePath, 'utf-8');
+    }
+  } catch (e) { /* ignore */ }
+  return null;
 });
 
 // Check if Gemini CLI is installed

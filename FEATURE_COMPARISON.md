@@ -16,8 +16,8 @@
 | **Sessions** | | | |
 | Session list in sidebar | Yes | Yes | Done |
 | Create/delete sessions | Yes | Yes | Done |
-| Session rename | Yes | Partial (auto-named) | **Missing: manual rename** |
-| Session filtering (Active/Archived) | Yes | No | **Missing** |
+| Session rename | Yes | Yes (double-click) | Done |
+| Session filtering (Active/Archived) | Yes | Yes | Done |
 | Multi-turn conversation (resume) | Yes | Yes | Done |
 | **Input** | | | |
 | Text input with auto-resize | Yes | Yes | Done |
@@ -31,31 +31,37 @@
 | Approval mode (auto/ask/yolo) | Yes | Yes | Done |
 | Sandbox mode | Yes | Yes | Done |
 | Global instructions | Yes | Yes | Done |
-| Folder-specific instructions | Yes | No | **Missing** |
+| Folder-specific instructions (GEMINI.md) | Yes | Yes | Done |
 | **Missing Features** | | | |
-| Dark mode / light mode toggle | Yes | Light only (sidebar dark) | **Missing: theme toggle** |
+| Dark mode / light mode toggle | Yes | Yes | Done |
 | Scheduled/recurring tasks | Yes | No | **Missing** |
-| Progress indicators per step | Yes (detailed) | Basic (thinking + tool) | **Could improve** |
+| Progress indicators per step | Yes (detailed) | Yes (expandable tool details) | Done |
 | Parallel sub-agent execution | Yes | No | N/A (Gemini CLI limitation) |
-| Permission prompts for destructive actions | Yes (inline) | No (uses approval mode) | **Missing** |
-| Server preview panel | Yes | No | **Missing** (Code-specific) |
-| Plugin/extension browser | Yes | No | **Missing** |
-| Session context usage display | Yes | No | **Missing** |
-| Thinking time indicator (timer) | Yes | No | **Missing** |
-| Expandable thinking/reasoning section | Yes | No | **Missing** |
-| Drag & drop file attachment | Yes | No | **Missing** |
-| Search across sessions | Yes | No | **Missing** |
-| Notification when background task completes | Yes | No | **Missing** |
+| Permission prompts for destructive actions | Yes (inline) | No (uses approval mode) | N/A (CLI limitation) |
+| Server preview panel | Yes | No | N/A (Claude Code-specific) |
+| Plugin/extension browser | Yes | No | N/A (CLI limitation) |
+| Session context usage display | Yes | Yes (token stats on result) | Done |
+| Thinking time indicator (timer) | Yes | Yes | Done |
+| Expandable thinking/reasoning section | Yes | Yes (tool use details) | Done |
+| Drag & drop file attachment | Yes | Yes | Done |
+| Search across sessions | Yes | Yes | Done |
+| Notification when background task completes | Yes | Yes | Done |
 
 ## Priority Improvements (biggest UX wins)
 
-1. **Thinking timer** — show elapsed time while waiting for response
-2. **Drag & drop files** — onto the input area
-3. **Dark/light theme toggle**
-4. **Session rename** — double-click to edit
-5. **Folder-specific instructions** — per-project GEMINI.md
-6. **Progress detail** — show what tool is running with expandable output
-7. **Context/token usage** — show from the `result` event stats
+1. ~~**Thinking timer** — show elapsed time while waiting for response~~ ✅
+2. ~~**Drag & drop files** — onto the input area~~ ✅
+3. ~~**Dark/light theme toggle**~~ ✅
+4. ~~**Session rename** — double-click to edit~~ ✅
+5. ~~**Folder-specific instructions** — per-project GEMINI.md~~ ✅
+6. ~~**Progress detail** — show what tool is running with expandable output~~ ✅
+7. ~~**Context/token usage** — show from the `result` event stats~~ ✅
+
+## Remaining Gaps (not feasible via Gemini CLI)
+- Scheduled/recurring tasks (would need a task scheduler daemon)
+- Inline permission prompts (Gemini CLI uses approval modes, not inline prompts)
+- Plugin/extension browser (no Gemini CLI equivalent)
+- Server preview panel (Claude Code-specific feature)
 
 ## Sources
 

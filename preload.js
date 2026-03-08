@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('geminiAPI', {
   openFolder: (path) => ipcRenderer.invoke('shell:openFolder', path),
 
   // Gemini CLI
+  readFolderInstructions: (dir) => ipcRenderer.invoke('gemini:readFolderInstructions', dir),
   checkInstalled: () => ipcRenderer.invoke('gemini:checkInstalled'),
   sendMessage: (payload) => ipcRenderer.invoke('gemini:sendMessage', payload),
   cancel: () => ipcRenderer.invoke('gemini:cancel'),

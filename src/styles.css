@@ -48,6 +48,25 @@
   --font-mono: 'Google Sans Mono', 'Cascadia Code', 'Consolas', monospace;
 }
 
+/* Dark theme overrides */
+[data-theme="dark"] {
+  --bg-primary: #1e1e2e;
+  --bg-secondary: #252542;
+  --bg-tertiary: #2d2d50;
+  --bg-input: #1e1e2e;
+  --bg-code: #252542;
+  --bg-user-msg: #2a2a4a;
+  --text-primary: #e8eaed;
+  --text-secondary: #9aa0a6;
+  --text-tertiary: #80868b;
+  --text-link: #8ab4f8;
+  --border-color: rgba(255,255,255,0.1);
+  --border-light: rgba(255,255,255,0.06);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.3);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,0.4);
+}
+
 /* Reset */
 *, *::before, *::after {
   box-sizing: border-box;
@@ -1340,3 +1359,141 @@ html, body {
   color: var(--gemini-blue);
   border: 1px solid rgba(66, 133, 244, 0.2);
 }
+
+/* ============================================
+   Session Search & Filters
+   ============================================ */
+.session-search {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.05);
+  color: var(--text-on-dark);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  outline: none;
+  margin-bottom: 6px;
+}
+.session-search::placeholder { color: var(--text-on-dark-secondary); }
+.session-search:focus { border-color: rgba(255,255,255,0.2); }
+
+.session-filters {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.session-filter {
+  padding: 3px 10px;
+  border: none;
+  border-radius: var(--radius-xl);
+  background: transparent;
+  color: var(--text-on-dark-secondary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.session-filter:hover { background: var(--bg-sidebar-hover); color: var(--text-on-dark); }
+.session-filter.active { background: var(--gemini-blue); color: white; }
+
+.session-rename-input {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 4px;
+  color: var(--text-on-dark);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 2px 4px;
+  width: 100%;
+  outline: none;
+}
+
+.session-archive {
+  opacity: 0;
+  font-size: 12px;
+  padding: 0 2px;
+  color: var(--text-on-dark-secondary);
+  transition: opacity 0.12s;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.session-item:hover .session-archive { opacity: 1; }
+
+/* ============================================
+   Thinking Timer
+   ============================================ */
+.thinking-timer {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+  min-width: 24px;
+}
+
+/* ============================================
+   Token/Stats Display
+   ============================================ */
+.message-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  padding: 4px 0 0 40px;
+  font-family: var(--font-mono);
+  flex-wrap: wrap;
+}
+
+/* ============================================
+   Drag & Drop
+   ============================================ */
+.input-wrapper.drag-over {
+  border-color: var(--gemini-blue);
+  background: rgba(66, 133, 244, 0.05);
+  box-shadow: 0 0 0 3px rgba(66, 133, 244, 0.15);
+}
+
+/* ============================================
+   Expandable Tool Details
+   ============================================ */
+.tool-detail {
+  margin: 4px 0;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.tool-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: background 0.1s;
+}
+.tool-detail-header:hover { background: var(--bg-tertiary); }
+.tool-detail-arrow {
+  font-size: 10px;
+  transition: transform 0.15s;
+  color: var(--text-tertiary);
+}
+.tool-detail.expanded .tool-detail-arrow { transform: rotate(90deg); }
+.tool-detail-body {
+  display: none;
+  padding: 8px 10px;
+  font-size: 12px;
+  border-top: 1px solid var(--border-light);
+}
+.tool-detail.expanded .tool-detail-body { display: block; }
+.tool-detail-params {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.tool-detail.tool-success .tool-detail-header { border-left: 3px solid var(--success); }
+.tool-detail.tool-error .tool-detail-header { border-left: 3px solid var(--error); }

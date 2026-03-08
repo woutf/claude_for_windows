@@ -20,7 +20,11 @@ const state = {
   },
   geminiVersion: null,
   messageCount: 0,
-  attachedFiles: []
+  attachedFiles: [],
+  folderInstructions: null,
+  sessionFilter: 'all',
+  sessionSearchQuery: '',
+  theme: localStorage.getItem('gemini-cowork-theme') || 'dark'
 };
 
 // Load saved state
@@ -89,10 +93,19 @@ const elements = {
   attachedFiles: $('#attached-files'),
   btnModelSelect: $('#btn-model-select'),
   modelSelectLabel: $('#model-select-label'),
-  modelDropdown: $('#model-dropdown')
+  modelDropdown: $('#model-dropdown'),
+  btnTheme: $('#btn-theme'),
+  themeLabel: $('#theme-label'),
+  themeIconLight: $('#theme-icon-light'),
+  themeIconDark: $('#theme-icon-dark'),
+  sessionSearch: $('#session-search')
 };
 
 // ============================================
+// Thinking timer
+let thinkingStartTime = null;
+let thinkingInterval = null;
+
 // Safe DOM helpers
 // ============================================
 
@@ -115,6 +128,7 @@ function setMarkdownContent(el, markdownText) {
 
 async function init() {
   loadState();
+  applyTheme();
   bindEvents();
   applySettings();
   renderSessions();
@@ -304,7 +318,66 @@ function bindEvents() {
     saveState();
   });
 
+  // Theme toggle
+  elements.btnTheme.addEventListener('click', () => {
+    state.theme = state.theme === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('gemini-cowork-theme', state.theme);
+    applyTheme();
+  });
+
+  // Session search
+  elements.sessionSearch.addEventListener('input', (e) => {
+    state.sessionSearchQuery = e.target.value.toLowerCase();
+    renderSessions();
+  });
+
+  // Session filters
+  document.querySelectorAll('.session-filter').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.session-filter').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.sessionFilter = btn.dataset.filter;
+      renderSessions();
+    });
+  });
+
+  // Drag & drop files
+  const inputWrapper = document.querySelector('.input-wrapper');
+  inputWrapper.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    inputWrapper.classList.add('drag-over');
+  });
+  inputWrapper.addEventListener('dragleave', () => {
+    inputWrapper.classList.remove('drag-over');
+  });
+  inputWrapper.addEventListener('drop', (e) => {
+    e.preventDefault();
+    inputWrapper.classList.remove('drag-over');
+    const files = Array.from(e.dataTransfer.files);
+    files.forEach(f => {
+      if (f.path) state.attachedFiles.push(f.path);
+    });
+    if (files.length) renderAttachedFiles();
+  });
+
   geminiAPI.onStream(handleStreamEvent);
+}
+
+// ============================================
+// Theme
+// ============================================
+
+function applyTheme() {
+  document.documentElement.dataset.theme = state.theme;
+  if (state.theme === 'dark') {
+    elements.themeIconLight.style.display = '';
+    elements.themeIconDark.style.display = 'none';
+    elements.themeLabel.textContent = 'Light Mode';
+  } else {
+    elements.themeIconLight.style.display = 'none';
+    elements.themeIconDark.style.display = '';
+    elements.themeLabel.textContent = 'Dark Mode';
+  }
 }
 
 // ============================================
@@ -315,6 +388,7 @@ async function selectFolder() {
   const folder = await geminiAPI.selectFolder();
   if (folder) {
     state.workingDir = folder;
+    state.folderInstructions = await geminiAPI.readFolderInstructions(folder);
     updateFolderDisplay();
     saveState();
 
@@ -341,7 +415,8 @@ function createNewSession() {
     id: Date.now().toString(),
     title: 'New Task',
     messages: [],
-    isResume: false
+    isResume: false,
+    archived: false
   };
   state.sessions.unshift(session);
   state.activeSessionId = session.id;
@@ -389,28 +464,77 @@ function switchToSession(sessionId) {
 function renderSessions() {
   elements.sessionsList.textContent = '';
 
-  if (state.sessions.length === 0) {
-    const empty = createEl('div', 'sessions-empty', 'No sessions yet');
+  let filtered = state.sessions;
+
+  // Filter by active/archived
+  if (state.sessionFilter === 'active') {
+    filtered = filtered.filter(s => !s.archived);
+  } else if (state.sessionFilter === 'archived') {
+    filtered = filtered.filter(s => s.archived);
+  }
+
+  // Search filter
+  if (state.sessionSearchQuery) {
+    filtered = filtered.filter(s =>
+      s.title.toLowerCase().includes(state.sessionSearchQuery) ||
+      s.messages.some(m => m.content && m.content.toLowerCase().includes(state.sessionSearchQuery))
+    );
+  }
+
+  if (filtered.length === 0) {
+    const empty = createEl('div', 'sessions-empty', state.sessions.length === 0 ? 'No sessions yet' : 'No matching sessions');
     elements.sessionsList.appendChild(empty);
     return;
   }
 
-  state.sessions.forEach(session => {
+  filtered.forEach(session => {
     const btn = createEl('button', `session-item${session.id === state.activeSessionId ? ' active' : ''}`);
     btn.dataset.id = session.id;
 
     const dot = createEl('span', 'session-dot');
     const label = createEl('span', 'session-label', session.title);
+
+    const archiveBtn = createEl('span', 'session-archive', session.archived ? '\u21A9' : '\u2193');
+    archiveBtn.title = session.archived ? 'Unarchive' : 'Archive';
     const deleteBtn = createEl('span', 'session-delete', '\u00d7');
     deleteBtn.title = 'Delete session';
 
     btn.appendChild(dot);
     btn.appendChild(label);
+    btn.appendChild(archiveBtn);
     btn.appendChild(deleteBtn);
+
+    // Double-click to rename
+    label.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      const input = createEl('input', 'session-rename-input');
+      input.type = 'text';
+      input.value = session.title;
+      label.textContent = '';
+      label.appendChild(input);
+      input.focus();
+      input.select();
+      const finish = () => {
+        const newTitle = input.value.trim() || session.title;
+        session.title = newTitle;
+        label.textContent = newTitle;
+        saveState();
+      };
+      input.addEventListener('blur', finish);
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') input.blur();
+        if (ev.key === 'Escape') { input.value = session.title; input.blur(); }
+      });
+    });
+
     btn.addEventListener('click', (e) => {
       if (e.target.closest('.session-delete')) {
         deleteSession(session.id);
-      } else {
+      } else if (e.target.closest('.session-archive')) {
+        session.archived = !session.archived;
+        renderSessions();
+        saveState();
+      } else if (!e.target.closest('.session-rename-input')) {
         switchToSession(session.id);
       }
     });
@@ -512,7 +636,9 @@ function addThinkingIndicator() {
   const dots = createEl('div', 'thinking-dots');
   for (let i = 0; i < 3; i++) dots.appendChild(createEl('span'));
   indicator.appendChild(dots);
-  indicator.appendChild(createEl('span', null, 'Thinking...'));
+  const timerSpan = createEl('span', 'thinking-timer', 'Thinking... 0s');
+  timerSpan.id = 'thinking-timer';
+  indicator.appendChild(timerSpan);
 
   body.appendChild(roleLabel);
   body.appendChild(indicator);
@@ -521,9 +647,18 @@ function addThinkingIndicator() {
 
   elements.messagesContainer.appendChild(msgEl);
   scrollToBottom();
+
+  thinkingStartTime = Date.now();
+  thinkingInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - thinkingStartTime) / 1000);
+    const timer = document.getElementById('thinking-timer');
+    if (timer) timer.textContent = 'Thinking... ' + elapsed + 's';
+  }, 1000);
 }
 
 function removeThinkingIndicator() {
+  if (thinkingInterval) { clearInterval(thinkingInterval); thinkingInterval = null; }
+  thinkingStartTime = null;
   const el = document.getElementById('thinking-indicator');
   if (el) el.remove();
 }
@@ -550,8 +685,15 @@ async function sendMessage() {
   }
 
   let fullMessage = message;
-  if (state.settings.instructions && state.messageCount === 0) {
-    fullMessage = `[System Instructions: ${state.settings.instructions}]\n\n${message}`;
+  if (state.messageCount === 0) {
+    let prefix = '';
+    if (state.folderInstructions) {
+      prefix += `[Project Instructions from GEMINI.md]:\n${state.folderInstructions}\n\n`;
+    }
+    if (state.settings.instructions) {
+      prefix += `[System Instructions: ${state.settings.instructions}]\n\n`;
+    }
+    if (prefix) fullMessage = prefix + message;
   }
 
   // Append attached file references to the prompt
@@ -664,29 +806,48 @@ function handleStreamEvent(event) {
       break;
     }
 
-    // stream-json: tool invocation
+    // stream-json: tool invocation (expandable)
     case 'tool_use': {
       removeThinkingIndicator();
       if (!streamMessageEl) {
         streamMessageEl = appendMessageToDOM('assistant', '');
       }
       const contentEl = streamMessageEl.querySelector('.message-content');
-      const label = event.tool_name || 'tool';
-      const activity = createEl('div', 'tool-activity');
-      activity.id = 'tool-' + (event.tool_id || '');
-      activity.textContent = label + (event.parameters && event.parameters.command ? ': ' + event.parameters.command : '');
-      contentEl.appendChild(activity);
+      const toolName = event.tool_name || 'tool';
+      const wrapper = createEl('div', 'tool-detail');
+      wrapper.id = 'tool-' + (event.tool_id || '');
+      const header = createEl('div', 'tool-detail-header');
+      const arrow = createEl('span', 'tool-detail-arrow', '\u25B6');
+      const labelText = toolName + (event.parameters && event.parameters.command ? ': ' + event.parameters.command : event.parameters && event.parameters.file_path ? ': ' + event.parameters.file_path : '');
+      const labelSpan = createEl('span', null, labelText);
+      header.appendChild(arrow);
+      header.appendChild(labelSpan);
+      wrapper.appendChild(header);
+      const body = createEl('div', 'tool-detail-body');
+      if (event.parameters) {
+        const params = createEl('pre', 'tool-detail-params', JSON.stringify(event.parameters, null, 2));
+        body.appendChild(params);
+      }
+      wrapper.appendChild(body);
+      header.addEventListener('click', () => wrapper.classList.toggle('expanded'));
+      contentEl.appendChild(wrapper);
       scrollToBottom();
       break;
     }
 
     // stream-json: tool result
     case 'tool_result': {
-      const activityEl = document.getElementById('tool-' + (event.tool_id || ''));
-      if (activityEl) {
-        activityEl.classList.add(event.status === 'success' ? 'tool-success' : 'tool-error');
+      const toolEl = document.getElementById('tool-' + (event.tool_id || ''));
+      if (toolEl) {
+        toolEl.classList.add(event.status === 'success' ? 'tool-success' : 'tool-error');
         if (event.output) {
-          activityEl.textContent += ' — ' + event.output;
+          const body = toolEl.querySelector('.tool-detail-body');
+          if (body) {
+            const output = createEl('div', null, event.output);
+            output.style.marginTop = '4px';
+            output.style.color = 'var(--text-secondary)';
+            body.appendChild(output);
+          }
         }
       }
       break;
@@ -694,7 +855,18 @@ function handleStreamEvent(event) {
 
     // stream-json: final result with stats
     case 'result': {
-      // Stats are available in event.stats if needed
+      if (event.stats && streamMessageEl) {
+        const s = event.stats;
+        const fmt = (n) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+        const parts = [];
+        if (s.input_tokens) parts.push('\u2191' + fmt(s.input_tokens));
+        if (s.output_tokens) parts.push('\u2193' + fmt(s.output_tokens));
+        if (s.cached) parts.push('\u26A1' + fmt(s.cached) + ' cached');
+        if (s.duration_ms) parts.push((s.duration_ms / 1000).toFixed(1) + 's');
+        if (s.tool_calls) parts.push(s.tool_calls + ' tool' + (s.tool_calls > 1 ? 's' : ''));
+        const statsEl = createEl('div', 'message-stats', parts.join(' \u00B7 '));
+        streamMessageEl.parentNode.insertBefore(statsEl, streamMessageEl.nextSibling);
+      }
       break;
     }
 
@@ -727,6 +899,15 @@ function handleStreamEvent(event) {
         if (session) {
           session.messages.push({ role: 'assistant', content: streamBuffer });
           saveState();
+        }
+        // Desktop notification when window isn't focused
+        if (!document.hasFocus()) {
+          try {
+            new Notification('Gemini Cowork', {
+              body: 'Task completed',
+              silent: false
+            });
+          } catch (e) { /* notifications may not be supported */ }
         }
       } else if (event.code !== 0) {
         const errText = event.error || '';
