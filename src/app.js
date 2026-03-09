@@ -888,7 +888,8 @@ function initChatStream() {
           header.appendChild(chatThinkingEl);
         }
         if (chatThinkingEl) {
-          chatThinkingEl.querySelector('.chat-thinking-body').textContent = chatThinkingText;
+          // Safe: parseMarkdown uses DOMPurify (preload.js)
+          chatThinkingEl.querySelector('.chat-thinking-body').innerHTML = geminiAPI.parseMarkdown(chatThinkingText);
         }
         elements.chatStatus.textContent = 'Thinking...';
       } else if (part.text) {
@@ -1003,7 +1004,8 @@ function createThinkingBlock(text, collapsed = false) {
 
   const body = document.createElement('div');
   body.className = 'chat-thinking-body';
-  if (text) body.textContent = text;
+  // Safe: parseMarkdown uses DOMPurify (preload.js)
+  if (text) body.innerHTML = geminiAPI.parseMarkdown(text);
 
   if (collapsed && text) {
     const words = text.split(/\s+/).length;

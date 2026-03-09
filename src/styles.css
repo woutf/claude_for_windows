@@ -1979,11 +1979,13 @@ html, body {
   background: var(--bg-secondary);
   border-left: 3px solid var(--gemini-purple);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  white-space: pre-wrap;
   max-height: 300px;
   overflow-y: auto;
   width: 100%;
 }
+
+.chat-thinking-body p { margin: 0 0 8px; }
+.chat-thinking-body p:last-child { margin-bottom: 0; }
 
 .chat-thinking.collapsed .chat-thinking-body { display: none; }
 .chat-thinking.streaming .chat-thinking-header { color: var(--gemini-purple); }
