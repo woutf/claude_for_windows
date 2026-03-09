@@ -695,7 +695,7 @@ function renderChatSessions() {
     if (s.pinned) dot.innerHTML = pinSvg;
     const label = createEl('span', 'session-label', s.title);
 
-    const pinBtn = createEl('span', 'session-pin', s.pinned ? '\u2716' : '\uD83D\uDCCC');
+    const pinBtn = createEl('span', 'session-pin', '\uD83D\uDCCC');
     pinBtn.title = s.pinned ? 'Unpin' : 'Pin';
     const archiveBtn = createEl('span', 'session-archive', s.archived ? '\u21A9' : '\u2193');
     archiveBtn.title = s.archived ? 'Unarchive' : 'Archive';
