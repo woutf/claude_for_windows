@@ -73,6 +73,7 @@ contextBridge.exposeInMainWorld('geminiAPI', {
   getMinimizeToTray: () => ipcRenderer.invoke('app:getMinimizeToTray'),
 
   // File utilities
+  readFileText: (filePath) => ipcRenderer.invoke('files:readAsText', filePath),
   readFileBase64: (filePath) => ipcRenderer.invoke('files:readAsBase64', filePath),
 
   // Chat API (Code Assist)

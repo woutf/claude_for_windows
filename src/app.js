@@ -34,6 +34,7 @@ const state = {
   chatModel: 'gemini-3-flash-preview',
   chatReady: false,
   chatStreaming: false,
+  chatAttachedFiles: [],
 };
 
 // Load saved state
@@ -133,6 +134,9 @@ const elements = {
   chatSend: $('#chat-send'),
   chatModelSelect: $('#chat-model-select'),
   chatStatus: $('#chat-status'),
+  chatBtnAttach: $('#chat-btn-attach'),
+  chatAttachedFiles: $('#chat-attached-files'),
+  chatEmptyState: $('#chat-empty-state'),
 };
 
 // ============================================
@@ -507,6 +511,34 @@ function bindEvents() {
     state.chatModel = e.target.value;
   });
 
+  // Chat file attach
+  elements.chatBtnAttach.addEventListener('click', async () => {
+    const files = await geminiAPI.selectFiles();
+    if (files && files.length) {
+      state.chatAttachedFiles.push(...files);
+      renderChatAttachedFiles();
+    }
+  });
+
+  // Chat drag & drop
+  const chatInputWrapper = document.querySelector('#chat-input-area .chat-input-wrapper');
+  chatInputWrapper.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    chatInputWrapper.classList.add('drag-over');
+  });
+  chatInputWrapper.addEventListener('dragleave', () => {
+    chatInputWrapper.classList.remove('drag-over');
+  });
+  chatInputWrapper.addEventListener('drop', (e) => {
+    e.preventDefault();
+    chatInputWrapper.classList.remove('drag-over');
+    const files = Array.from(e.dataTransfer.files);
+    files.forEach(f => {
+      if (f.path) state.chatAttachedFiles.push(f.path);
+    });
+    if (files.length) renderChatAttachedFiles();
+  });
+
   geminiAPI.onStream(handleStreamEvent);
 }
 
@@ -562,6 +594,7 @@ function createNewSession() {
   if (state.mode === 'chat') {
     state.chatSessionId = crypto.randomUUID();
     elements.chatMessages.textContent = '';
+    updateChatEmptyState();
     elements.chatInput.focus();
     loadChatSessions();
     return;
@@ -646,6 +679,7 @@ async function initChat() {
   state.chatReady = true;
   elements.chatStatus.textContent = '';
   elements.chatInput.disabled = false;
+  updateChatEmptyState();
   loadChatSessions();
 }
 
@@ -695,18 +729,30 @@ function renderChatSessions() {
     if (s.pinned) dot.innerHTML = pinSvg;
     const label = createEl('span', 'session-label', s.title);
 
-    const pinBtn = createEl('span', 'session-pin', '\uD83D\uDCCC');
+    const actions = document.createElement('span');
+    actions.className = 'session-actions';
+    // Safe: all static SVG, no user input
+    const pinBtn = document.createElement('span');
+    pinBtn.className = 'session-pin';
     pinBtn.title = s.pinned ? 'Unpin' : 'Pin';
-    const archiveBtn = createEl('span', 'session-archive', s.archived ? '\u21A9' : '\u2193');
+    pinBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M9.828.722a.5.5 0 01.354.146l4.95 4.95a.5.5 0 01-.707.707l-.71-.71-3.18 3.18a3.02 3.02 0 01-.38 3.306L8.5 14.06l-5.56-5.56 1.76-1.657a3.02 3.02 0 013.306-.38l3.18-3.18-.71-.71a.5.5 0 01.354-.854zM2.354 13.354l3-3-.707-.707-3 3a.5.5 0 00.707.707z"/></svg>';
+    const archiveBtn = document.createElement('span');
+    archiveBtn.className = 'session-archive';
     archiveBtn.title = s.archived ? 'Unarchive' : 'Archive';
-    const delBtn = createEl('span', 'session-delete', '\u00D7');
+    archiveBtn.innerHTML = s.archived
+      ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><line x1="12" y1="6" x2="12" y2="18"/></svg>'
+      : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"/><line x1="12" y1="18" x2="12" y2="6"/></svg>';
+    const delBtn = document.createElement('span');
+    delBtn.className = 'session-delete';
     delBtn.title = 'Delete';
+    delBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+    actions.appendChild(pinBtn);
+    actions.appendChild(archiveBtn);
+    actions.appendChild(delBtn);
 
     btn.appendChild(dot);
     btn.appendChild(label);
-    btn.appendChild(pinBtn);
-    btn.appendChild(archiveBtn);
-    btn.appendChild(delBtn);
+    btn.appendChild(actions);
 
     btn.addEventListener('click', async (e) => {
       if (e.target.closest('.session-delete')) {
@@ -716,6 +762,7 @@ function renderChatSessions() {
         if (state.chatSessionId === s.id) {
           state.chatSessionId = null;
           elements.chatMessages.textContent = '';
+          updateChatEmptyState();
         }
         loadChatSessions();
       } else if (e.target.closest('.session-pin')) {
@@ -747,6 +794,7 @@ async function switchToChatSession(sessionId) {
   if (session.messages) {
     session.messages.forEach(msg => appendChatMessage(msg));
   }
+  updateChatEmptyState();
   chatScrollToBottom();
   renderChatSessions();
 }
@@ -771,9 +819,38 @@ async function sendChatMessage() {
     };
   }
 
-  const userContent = { role: 'user', parts: [{ text }] };
+  // Read attached files and build extra parts
+  const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
+  const fileParts = [];
+  const fileNames = [];
+  for (const filePath of state.chatAttachedFiles) {
+    const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase();
+    const fileName = filePath.split(/[/\\]/).pop();
+    fileNames.push(fileName);
+    if (IMAGE_EXTS.includes(ext)) {
+      const img = await geminiAPI.readFileBase64(filePath);
+      if (img) {
+        fileParts.push({ inlineData: { mimeType: img.mediaType, data: img.data } });
+      }
+    } else {
+      const content = await geminiAPI.readFileText(filePath);
+      if (content != null) {
+        fileParts.push({ text: '// ' + fileName + '\n' + content });
+      }
+    }
+  }
+
+  const userParts = [{ text }, ...fileParts];
+  const userContent = { role: 'user', parts: userParts };
+  // For display, show file names in the message
+  if (fileNames.length) {
+    userContent._fileNames = fileNames;
+  }
   session.messages.push(userContent);
   appendChatMessage(userContent);
+
+  state.chatAttachedFiles = [];
+  renderChatAttachedFiles();
 
   elements.chatInput.value = '';
   autoResizeTextarea(elements.chatInput);
@@ -793,7 +870,10 @@ async function sendChatMessage() {
   // Send full history so context survives model switches
   const contents = session.messages.map(m => ({
     role: m.role,
-    parts: m.parts.filter(p => !p.thought).map(p => ({ text: p.text || '' })),
+    parts: m.parts.filter(p => !p.thought).map(p => {
+      if (p.inlineData) return { inlineData: p.inlineData };
+      return { text: p.text || '' };
+    }),
   }));
 
   const sendResult = await geminiAPI.chatSend({
@@ -943,8 +1023,10 @@ function appendChatMessage(msg, isStreaming = false) {
   // Header row: role label + model badge + thinking (inline)
   const header = document.createElement('div');
   header.className = 'chat-msg-header';
-  const roleLabel = createEl('span', 'chat-msg-role', msg.role === 'user' ? 'You' : 'Gemini');
-  header.appendChild(roleLabel);
+  if (msg.role === 'model') {
+    const roleLabel = createEl('span', 'chat-msg-role', 'Gemini');
+    header.appendChild(roleLabel);
+  }
 
   if (msg.role === 'model' && state.chatModel) {
     const badge = createEl('span', 'chat-model-badge', state.chatModel.includes('pro') ? 'Pro' : 'Flash');
@@ -956,7 +1038,25 @@ function appendChatMessage(msg, isStreaming = false) {
   body.className = 'chat-msg-body';
 
   if (msg.role === 'user') {
-    body.textContent = msg.parts.map(p => p.text || '').join('');
+    // Show only text parts (not file content inline)
+    const textOnly = msg.parts.filter(p => p.text && !p.inlineData).map(p => p.text).join('');
+    // Strip "// filename\n..." file content — show only the user's actual message
+    const firstText = msg.parts[0]?.text || '';
+    body.textContent = firstText;
+    // Show file attachment chips
+    if (msg._fileNames && msg._fileNames.length) {
+      const filesRow = document.createElement('div');
+      filesRow.className = 'chat-msg-files';
+      for (const name of msg._fileNames) {
+        const chip = document.createElement('span');
+        chip.className = 'chat-msg-file-chip';
+        // Safe: static inline SVG, no user input
+        chip.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>';
+        chip.appendChild(document.createTextNode(' ' + name));
+        filesRow.appendChild(chip);
+      }
+      body.appendChild(filesRow);
+    }
   } else if (!isStreaming) {
     for (const part of msg.parts) {
       if (part.thought) {
@@ -977,6 +1077,7 @@ function appendChatMessage(msg, isStreaming = false) {
   div.appendChild(avatar);
   div.appendChild(bodyWrap);
   elements.chatMessages.appendChild(div);
+  updateChatEmptyState();
   chatScrollToBottom();
 
   if (isStreaming) chatStreamEl = div;
@@ -992,7 +1093,8 @@ function createThinkingBlock(text, collapsed = false) {
 
   const toggle = document.createElement('span');
   toggle.className = 'chat-thinking-toggle';
-  toggle.textContent = '\u25BC';
+  // Safe: static inline SVG, no user input
+  toggle.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5L6 7.5L9 4.5"/></svg>';
 
   const label = document.createElement('span');
   label.className = 'chat-thinking-label';
@@ -1019,6 +1121,12 @@ function createThinkingBlock(text, collapsed = false) {
 
 function chatScrollToBottom() {
   elements.chatMessagesArea.scrollTop = elements.chatMessagesArea.scrollHeight;
+}
+
+function updateChatEmptyState() {
+  const hasMessages = elements.chatMessages.children.length > 0;
+  elements.chatEmptyState.style.display = hasMessages ? 'none' : '';
+  elements.chatMessagesArea.style.display = hasMessages ? '' : 'none';
 }
 
 function showWelcomeScreen() {
@@ -1777,6 +1885,30 @@ function renderAttachedFiles() {
     chip.appendChild(name);
     chip.appendChild(removeBtn);
     elements.attachedFiles.appendChild(chip);
+  });
+}
+
+function renderChatAttachedFiles() {
+  elements.chatAttachedFiles.textContent = '';
+  if (state.chatAttachedFiles.length === 0) {
+    elements.chatAttachedFiles.style.display = 'none';
+    return;
+  }
+  elements.chatAttachedFiles.style.display = 'flex';
+  state.chatAttachedFiles.forEach((filePath, idx) => {
+    const chip = createEl('div', 'attached-file');
+    const icon = createEl('span', null, '\uD83D\uDCCE');
+    const name = createEl('span', 'attached-file-name', filePath.split(/[/\\]/).pop());
+    name.title = filePath;
+    const removeBtn = createEl('button', 'attached-file-remove', '\u00d7');
+    removeBtn.addEventListener('click', () => {
+      state.chatAttachedFiles.splice(idx, 1);
+      renderChatAttachedFiles();
+    });
+    chip.appendChild(icon);
+    chip.appendChild(name);
+    chip.appendChild(removeBtn);
+    elements.chatAttachedFiles.appendChild(chip);
   });
 }
 

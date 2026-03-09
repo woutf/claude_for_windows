@@ -171,11 +171,26 @@
 
     <!-- Chat View (API-based, visible in Chat mode) -->
     <div id="chat-view" style="display:none;">
+      <div id="chat-empty-state" class="chat-empty-state">
+        <div class="chat-empty-icon">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <defs><linearGradient id="emptyGrad" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse"><stop stop-color="#4285F4"/><stop offset="0.5" stop-color="#9B72CB"/><stop offset="1" stop-color="#D96570"/></linearGradient></defs>
+            <path d="M24 4L29 18H43L31 27L35 42L24 33L13 42L17 27L5 18H19L24 4Z" fill="url(#emptyGrad)" opacity="0.2"/>
+            <path d="M24 4L29 18H43L31 27L35 42L24 33L13 42L17 27L5 18H19L24 4Z" stroke="url(#emptyGrad)" stroke-width="1.5" fill="none"/>
+          </svg>
+        </div>
+        <div class="chat-empty-title">How can I help you?</div>
+        <div class="chat-empty-hint">Ask anything, attach files, or start exploring.</div>
+      </div>
       <div id="chat-messages-area">
         <div id="chat-messages"></div>
       </div>
       <div id="chat-input-area">
+        <div id="chat-attached-files"></div>
         <div class="chat-input-wrapper">
+          <button id="chat-btn-attach" class="btn-icon" title="Attach files">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+          </button>
           <div class="chat-model-select">
             <select id="chat-model-select">
               <option value="gemini-3-flash-preview">Flash</option>

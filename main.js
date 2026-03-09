@@ -937,6 +937,15 @@ ipcMain.handle('files:cleanAttachments', async (_, workingDir) => {
   }
 });
 
+// Read file as UTF-8 text
+ipcMain.handle('files:readAsText', async (_, filePath) => {
+  try {
+    return fs.readFileSync(filePath, 'utf-8');
+  } catch (e) {
+    return null;
+  }
+});
+
 // Read file as base64 (for ACP image attachments)
 ipcMain.handle('files:readAsBase64', async (_, filePath) => {
   try {
