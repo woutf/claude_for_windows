@@ -884,8 +884,8 @@ function initChatStream() {
         chatThinkingText += part.text;
         if (!chatThinkingEl && chatStreamEl) {
           chatThinkingEl = createThinkingBlock();
-          const body = chatStreamEl.querySelector('.chat-msg-body');
-          body.insertBefore(chatThinkingEl, body.firstChild);
+          const header = chatStreamEl.querySelector('.chat-msg-header');
+          header.appendChild(chatThinkingEl);
         }
         if (chatThinkingEl) {
           chatThinkingEl.querySelector('.chat-thinking-body').textContent = chatThinkingText;
@@ -926,21 +926,31 @@ function appendChatMessage(msg, isStreaming = false) {
   const div = document.createElement('div');
   div.className = 'chat-msg ' + msg.role;
 
-  const header = document.createElement('div');
-  header.className = 'chat-msg-header';
-
+  // Avatar (matches Cowork style)
+  const avatar = document.createElement('div');
+  avatar.className = 'chat-msg-avatar';
   if (msg.role === 'user') {
-    header.textContent = 'You';
+    avatar.appendChild(createEl('span', null, 'Y'));
   } else {
-    header.textContent = 'Gemini';
-    if (state.chatModel) {
-      const label = document.createElement('span');
-      label.className = 'model-label';
-      label.textContent = state.chatModel.includes('pro') ? 'Pro' : 'Flash';
-      header.appendChild(label);
-    }
+    avatar.appendChild(buildAvatarSVG());
   }
 
+  // Body container
+  const bodyWrap = document.createElement('div');
+  bodyWrap.className = 'chat-msg-body-wrap';
+
+  // Header row: role label + model badge + thinking (inline)
+  const header = document.createElement('div');
+  header.className = 'chat-msg-header';
+  const roleLabel = createEl('span', 'chat-msg-role', msg.role === 'user' ? 'You' : 'Gemini');
+  header.appendChild(roleLabel);
+
+  if (msg.role === 'model' && state.chatModel) {
+    const badge = createEl('span', 'chat-model-badge', state.chatModel.includes('pro') ? 'Pro' : 'Flash');
+    header.appendChild(badge);
+  }
+
+  // Content area
   const body = document.createElement('div');
   body.className = 'chat-msg-body';
 
@@ -949,7 +959,7 @@ function appendChatMessage(msg, isStreaming = false) {
   } else if (!isStreaming) {
     for (const part of msg.parts) {
       if (part.thought) {
-        body.appendChild(createThinkingBlock(part.thought, true));
+        header.appendChild(createThinkingBlock(part.thought, true));
       } else if (part.text) {
         const textDiv = document.createElement('div');
         textDiv.className = 'chat-text-content';
@@ -961,8 +971,10 @@ function appendChatMessage(msg, isStreaming = false) {
     }
   }
 
-  div.appendChild(header);
-  div.appendChild(body);
+  bodyWrap.appendChild(header);
+  bodyWrap.appendChild(body);
+  div.appendChild(avatar);
+  div.appendChild(bodyWrap);
   elements.chatMessages.appendChild(div);
   chatScrollToBottom();
 
