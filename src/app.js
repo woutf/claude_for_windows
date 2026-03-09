@@ -155,6 +155,7 @@ function switchMode(mode, isInit) {
   if (!isInit) {
     state.activeSessionId = null;
     state.messageCount = 0;
+    geminiAPI.resetSession(state.workingDir || undefined);
   }
 
   // Update toggle buttons
@@ -173,7 +174,8 @@ function switchMode(mode, isInit) {
   elements.welcomeActionsCowork.style.display = isChat ? 'none' : '';
   elements.welcomeSuggestionsCowork.style.display = isChat ? 'none' : '';
   elements.welcomeChatInput.style.display = isChat ? '' : 'none';
-  document.getElementById('setup-check').style.display = isChat ? 'none' : '';
+  // Show warmup indicator in both modes until CLI is ready
+  document.getElementById('setup-check').style.display = (isChat && state.cliReady) ? 'none' : '';
 
   // Update task header folder display visibility
   const folderHeader = document.getElementById('current-folder-display');
@@ -236,13 +238,25 @@ async function init() {
     }
   }
 
-  // Preload ACP process in background so first query is instant
-  if (state.settings.useACP && version) {
+  // Always preload ACP process in background so first query is instant
+  if (version) {
+    setupText.textContent = 'Warming up Gemini CLI...';
+    setupIcon.className = 'setup-icon loading';
+    geminiAPI.onReady(() => {
+      state.cliReady = true;
+      setupIcon.className = 'setup-icon success';
+      setupText.textContent = version === 'installed' ? 'Gemini CLI ready' : `Gemini CLI v${version} ready`;
+      // Hide indicator in Chat mode once ready
+      if (state.mode === 'chat') {
+        document.getElementById('setup-check').style.display = 'none';
+      }
+    });
     geminiAPI.preloadACP({
       apiKey: state.settings.apiKey || undefined,
       model: state.settings.model || undefined,
       sandbox: state.settings.sandbox,
-      subagents: state.settings.subagents
+      subagents: state.settings.subagents,
+      workingDir: state.workingDir || undefined
     });
   }
 }
@@ -530,8 +544,8 @@ function updateFolderDisplay() {
 // ============================================
 
 function createNewSession() {
-  // Kill ACP process when starting a new session
-  geminiAPI.cancel();
+  // Reset ACP session for new conversation (keeps process warm)
+  geminiAPI.resetSession(state.workingDir || undefined);
 
   const session = {
     id: Date.now().toString(),
@@ -914,7 +928,7 @@ async function sendMessage() {
     approvalMode: state.settings.approvalMode || 'yolo',
     sandbox: state.settings.sandbox,
     subagents: state.settings.subagents,
-    useACP: state.settings.useACP,
+    useACP: true,
     imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
     resume: state.messageCount > 0
   };

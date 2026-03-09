@@ -39,6 +39,9 @@ contextBridge.exposeInMainWorld('geminiAPI', {
   onStream: (callback) => {
     ipcRenderer.on('gemini:stream', (_, data) => callback(data));
   },
+  onReady: (callback) => {
+    ipcRenderer.on('gemini:ready', () => callback());
+  },
 
   // File attachments
   copyToWorkDir: (files, workingDir) => ipcRenderer.invoke('files:copyToWorkDir', { files, workingDir }),
@@ -56,6 +59,7 @@ contextBridge.exposeInMainWorld('geminiAPI', {
 
   // ACP mode
   preloadACP: (options) => ipcRenderer.invoke('gemini:preloadACP', options),
+  resetSession: (workingDir) => ipcRenderer.invoke('gemini:resetSession', workingDir),
   respondPermission: (toolId, outcome) => ipcRenderer.invoke('gemini:respondPermission', { toolId, outcome }),
 
   // App settings (startup, tray)

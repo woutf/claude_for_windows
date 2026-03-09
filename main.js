@@ -390,11 +390,14 @@ async function ensureACPSession(workingDir) {
   acpHasSession = true;
 }
 
-// Preload ACP process in background
+// Preload ACP process in background (spawn + init + session)
 ipcMain.handle('gemini:preloadACP', async (_, options) => {
   if (acpProcess || acpReadyPromise) return;
-  acpReadyPromise = spawnACPProcess(options).then(() => {
+  acpReadyPromise = spawnACPProcess(options).then(async () => {
+    // Pre-create session so first message is instant
+    await ensureACPSession(options.workingDir || process.cwd());
     acpReadyPromise = null;
+    if (mainWindow) mainWindow.webContents.send('gemini:ready');
   }).catch(() => {
     acpReadyPromise = null;
   });
@@ -560,6 +563,19 @@ ipcMain.handle('gemini:sendMessage', async (event, { message, workingDir, option
       reject(err);
     });
   });
+});
+
+// Reset ACP session for new chat (keeps process alive, pre-creates new session)
+ipcMain.handle('gemini:resetSession', async (_, workingDir) => {
+  acpSessionId = null;
+  acpHasSession = false;
+  // Pre-create new session immediately so next message is instant
+  if (acpProcess) {
+    try {
+      await ensureACPSession(workingDir || process.cwd());
+    } catch (e) { /* session will be created on next message */ }
+  }
+  return true;
 });
 
 // Cancel active Gemini process
