@@ -117,30 +117,6 @@
             </button>
           </div>
 
-          <div class="welcome-suggestions" id="welcome-suggestions-cowork">
-            <p class="suggestions-label">Try asking Gemini to:</p>
-            <div class="suggestion-chips">
-              <button class="suggestion-chip" data-prompt="Organize and rename all files in this folder by type and date" data-mode="cowork">Organize files by type</button>
-              <button class="suggestion-chip" data-prompt="Summarize all documents in this folder and create a summary.md" data-mode="cowork">Summarize all documents</button>
-              <button class="suggestion-chip" data-prompt="Find and list all TODO items across files in this project" data-mode="cowork">Find all TODOs</button>
-              <button class="suggestion-chip" data-prompt="Review the code in this project and suggest improvements" data-mode="cowork">Review code quality</button>
-            </div>
-          </div>
-
-          <div id="welcome-chat-input" class="welcome-chat-input" style="display:none;">
-            <div class="welcome-input-wrapper">
-              <textarea id="welcome-chat-textarea" placeholder="How can I help you today?" rows="1"></textarea>
-              <button id="welcome-chat-send" class="btn-send" disabled>
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3.5 17L5 10.5 3.5 3 18 10 3.5 17z" fill="currentColor"/><path d="M5 10.5H14" stroke="white" stroke-width="1.5"/></svg>
-              </button>
-            </div>
-            <div class="welcome-chat-chips">
-              <button class="suggestion-chip" data-prompt="Explain quantum computing in simple terms" data-mode="chat">Explain quantum computing</button>
-              <button class="suggestion-chip" data-prompt="Write a Python script that converts CSV to JSON" data-mode="chat">CSV to JSON script</button>
-              <button class="suggestion-chip" data-prompt="What are the best practices for REST API design?" data-mode="chat">REST API best practices</button>
-              <button class="suggestion-chip" data-prompt="Help me write a professional email to decline a meeting" data-mode="chat">Write a professional email</button>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -183,7 +159,7 @@
             <div class="input-footer-left">
               <div class="model-toggle" id="model-toggle">
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1C6 4.866 3.866 7 0 7c3.866 0 7 2.134 7 6 0-3.866 2.134-7 6-7-3.866 0-7-3.134-7-6z" fill="currentColor" opacity="0.4"/></svg>
-                <button class="model-toggle-btn active" data-model="gemini-3-flash-preview">Flash</button>
+                <button class="model-toggle-btn" data-model="gemini-3-flash-preview">Flash</button>
                 <button class="model-toggle-btn" data-model="gemini-3-pro-preview">Pro</button>
               </div>
             </div>
@@ -192,6 +168,31 @@
         </div>
       </div>
     </main>
+
+    <!-- Chat View (API-based, visible in Chat mode) -->
+    <div id="chat-view" style="display:none;">
+      <div id="chat-messages-area">
+        <div id="chat-messages"></div>
+      </div>
+      <div id="chat-input-area">
+        <div class="chat-input-wrapper">
+          <div class="chat-model-select">
+            <select id="chat-model-select">
+              <option value="gemini-3-flash-preview">Flash</option>
+              <option value="gemini-3.1-pro-preview">Pro</option>
+            </select>
+          </div>
+          <textarea id="chat-input" placeholder="Type a message..." rows="1"></textarea>
+          <button id="chat-send" class="btn-send" disabled>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3.5 17L5 10.5 3.5 3 18 10 3.5 17z" fill="currentColor"/><path d="M5 10.5H14" stroke="white" stroke-width="1.5"/></svg>
+          </button>
+        </div>
+        <div class="chat-input-footer">
+          <span id="chat-status"></span>
+          <span class="input-hint">Enter to send, Shift+Enter for new line</span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Settings Modal -->

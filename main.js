@@ -4,7 +4,20 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 
+// Load .env file into process.env
+try {
+  const envFile = fs.readFileSync(path.join(__dirname, '.env'), 'utf-8');
+  for (const line of envFile.split('\n')) {
+    const match = line.match(/^([^#=]+)=(.*)$/);
+    if (match) process.env[match[1].trim()] = match[2].trim();
+  }
+} catch {}
+
+const { CodeAssistClient } = require('./code-assist-client');
+
 const GEMINI_SETTINGS_PATH = path.join(os.homedir(), '.gemini', 'settings.json');
+let chatClient = null;
+const SESSIONS_DIR = path.join(os.homedir(), '.geminui', 'sessions');
 
 // Enable CDP remote debugging for Playwright/automation (Electron 30+ requires this approach)
 if (process.argv.includes('--dev')) {
@@ -17,12 +30,77 @@ let minimizeToTray = false;
 let activeProcess = null;
 let acpProcess = null;
 let acpMessageId = 1;
-let acpSessionId = null;
+let acpSessions = {};           // uiSessionId -> acpSessionId
+let acpActiveUISession = null;  // which UI session receives stream events
 let acpPendingResolves = {};
 let acpPermissionRequestIds = {};
 let acpCancelled = false;
 let acpReadyPromise = null;
-let acpHasSession = false;
+let acpSummaryInterceptor = null; // Temporary interceptor for shutdown summaries
+let isShuttingDown = false;
+
+function resetACPState() {
+  acpProcess = null;
+  acpSessions = {};
+  acpActiveUISession = null;
+  acpMessageId = 1;
+  acpPendingResolves = {};
+  acpPermissionRequestIds = {};
+  acpCancelled = false;
+  acpReadyPromise = null;
+  acpSummaryInterceptor = null;
+}
+
+function ensureSessionsDir() {
+  if (!fs.existsSync(SESSIONS_DIR)) {
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  }
+}
+
+function getSessionPath(sessionId) {
+  return path.join(SESSIONS_DIR, `${sessionId}.json`);
+}
+
+function loadChatSession(sessionId) {
+  const p = getSessionPath(sessionId);
+  if (!fs.existsSync(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  } catch (e) {
+    console.error('Failed to load session:', sessionId, e.message);
+    return null;
+  }
+}
+
+function saveChatSession(session) {
+  ensureSessionsDir();
+  session.lastUsedAt = Date.now();
+  fs.writeFileSync(getSessionPath(session.id), JSON.stringify(session, null, 2));
+}
+
+function deleteChatSession(sessionId) {
+  const p = getSessionPath(sessionId);
+  if (fs.existsSync(p)) fs.unlinkSync(p);
+}
+
+function listChatSessions() {
+  ensureSessionsDir();
+  const files = fs.readdirSync(SESSIONS_DIR).filter(f => f.endsWith('.json'));
+  const sessions = [];
+  for (const file of files) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, file), 'utf-8'));
+      sessions.push({
+        id: data.id,
+        title: data.title,
+        model: data.model,
+        createdAt: data.createdAt,
+        lastUsedAt: data.lastUsedAt,
+      });
+    } catch (e) { /* skip corrupt files */ }
+  }
+  return sessions.sort((a, b) => (b.lastUsedAt || 0) - (a.lastUsedAt || 0));
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -88,17 +166,36 @@ function destroyTray() {
 
 app.whenReady().then(createWindow);
 
-app.on('before-quit', () => {
+app.on('before-quit', async (e) => {
+  if (isShuttingDown) return;
   app.isQuitting = true;
+
+  const activeEntries = Object.entries(acpSessions);
+  if (acpProcess && activeEntries.length > 0 && mainWindow) {
+    e.preventDefault();
+    isShuttingDown = true;
+
+    const summaries = {};
+    for (const [uiId, acpId] of activeEntries) {
+      const summary = await summarizeACPSession(acpId, 10000);
+      if (summary) summaries[uiId] = summary;
+    }
+
+    if (Object.keys(summaries).length > 0) {
+      mainWindow.webContents.send('gemini:shutdown-summaries', summaries);
+      // Give renderer a moment to persist to localStorage
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    if (acpProcess) acpProcess.kill();
+    if (activeProcess) activeProcess.kill();
+    app.quit();
+  }
 });
 
 app.on('window-all-closed', () => {
-  if (acpProcess) {
-    acpProcess.kill();
-  }
-  if (activeProcess) {
-    activeProcess.kill();
-  }
+  if (acpProcess) acpProcess.kill();
+  if (activeProcess) activeProcess.kill();
   app.quit();
 });
 
@@ -113,6 +210,66 @@ ipcMain.handle('window:maximize', () => {
 });
 ipcMain.handle('window:close', () => mainWindow.close());
 ipcMain.handle('window:isMaximized', () => mainWindow.isMaximized());
+
+// Chat API (Code Assist)
+let chatInitPromise = null;
+
+ipcMain.handle('chat:init', async () => {
+  if (chatClient && chatClient.initialized) {
+    return { ok: true, userTier: chatClient.userTier, enableCredits: chatClient.enableCredits };
+  }
+  if (chatInitPromise) return chatInitPromise;
+
+  chatInitPromise = (async () => {
+    try {
+      if (!CodeAssistClient.hasCredentials()) {
+        return { error: 'NO_CREDENTIALS' };
+      }
+      chatClient = new CodeAssistClient();
+      await chatClient.init();
+      return { ok: true, userTier: chatClient.userTier, enableCredits: chatClient.enableCredits };
+    } catch (err) {
+      return { error: err.message };
+    } finally {
+      chatInitPromise = null;
+    }
+  })();
+
+  return chatInitPromise;
+});
+
+ipcMain.handle('chat:send', async (_, { model, contents, sessionId, systemInstruction }) => {
+  if (!chatClient || !chatClient.initialized) {
+    return { error: 'NOT_INITIALIZED' };
+  }
+  chatClient.streamMessage({
+    model,
+    contents,
+    sessionId,
+    systemInstruction,
+    onChunk: (chunk) => {
+      if (mainWindow) mainWindow.webContents.send('chat:stream', chunk);
+    },
+    onError: (err) => {
+      const body = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      if (mainWindow) mainWindow.webContents.send('chat:stream', { error: true, message: body, status: err.status || err.code });
+    },
+    onDone: () => {
+      if (mainWindow) mainWindow.webContents.send('chat:stream', { done: true });
+    },
+  });
+  return { ok: true };
+});
+
+ipcMain.handle('chat:cancel', () => {
+  if (chatClient) chatClient.cancel();
+  return { ok: true };
+});
+
+ipcMain.handle('chat:sessions:list', () => listChatSessions());
+ipcMain.handle('chat:sessions:load', (_, sessionId) => loadChatSession(sessionId));
+ipcMain.handle('chat:sessions:save', (_, session) => { saveChatSession(session); return { ok: true }; });
+ipcMain.handle('chat:sessions:delete', (_, sessionId) => { deleteChatSession(sessionId); return { ok: true }; });
 
 // Launch on startup
 ipcMain.handle('app:setAutoLaunch', (_, enabled) => {
@@ -223,8 +380,19 @@ function sendACPRequest(method, params) {
   });
 }
 
+// Reverse lookup: acpSessionId -> uiSessionId
+function findUISessionByACP(acpId) {
+  for (const [uiId, aId] of Object.entries(acpSessions)) {
+    if (aId === acpId) return uiId;
+  }
+  return null;
+}
+
 // Handle a parsed JSON-RPC message from ACP stdout
 function handleACPMessage(msg) {
+  // Check if summary interceptor wants this message
+  if (acpSummaryInterceptor && acpSummaryInterceptor(msg)) return;
+
   // JSON-RPC response to our request (has id, no method)
   if (msg.id !== undefined && !msg.method) {
     const pending = acpPendingResolves[msg.id];
@@ -244,6 +412,11 @@ function handleACPMessage(msg) {
     const update = msg.params.update;
     if (!update) return;
 
+    // Only forward events for the active UI session
+    const eventAcpId = msg.params.sessionId;
+    const eventUISession = findUISessionByACP(eventAcpId);
+    if (eventUISession !== acpActiveUISession) return;
+
     switch (update.sessionUpdate) {
       case 'agent_message_chunk':
         if (update.content && update.content.text) {
@@ -255,7 +428,7 @@ function handleACPMessage(msg) {
       case 'agent_thought_chunk':
         if (update.content && update.content.text) {
           mainWindow.webContents.send('gemini:stream', {
-            type: 'message', role: 'assistant', content: update.content.text
+            type: 'thought', content: update.content.text
           });
         }
         break;
@@ -283,6 +456,10 @@ function handleACPMessage(msg) {
 
   // Agent request: permission needed
   if ((msg.method === 'client/requestPermission' || msg.method === 'session/request_permission') && msg.params) {
+    const eventAcpId = msg.params.sessionId;
+    const eventUISession = findUISessionByACP(eventAcpId);
+    if (eventUISession !== acpActiveUISession) return;
+
     const { toolCall, options } = msg.params;
     if (toolCall) {
       acpPermissionRequestIds[toolCall.toolCallId] = msg.id;
@@ -335,34 +512,21 @@ async function spawnACPProcess(options) {
 
   acpProcess.on('close', (code) => {
     const wasCancelled = acpCancelled;
-    const hadSession = acpHasSession;
+    const hadSessions = Object.keys(acpSessions).length > 0;
     for (const id of Object.keys(acpPendingResolves)) {
       acpPendingResolves[id].reject(new Error('ACP process exited with code ' + code));
     }
-    acpProcess = null;
-    acpSessionId = null;
-    acpMessageId = 1;
-    acpPendingResolves = {};
-    acpPermissionRequestIds = {};
-    acpCancelled = false;
-    acpReadyPromise = null;
-    acpHasSession = false;
+    resetACPState();
     // Only notify renderer if there was an active session (not a background preload crash)
-    if (!wasCancelled && hadSession && mainWindow) {
+    if (!wasCancelled && hadSessions && mainWindow) {
       mainWindow.webContents.send('gemini:stream', { type: 'done', code, error: stderrBuffer || 'ACP process exited' });
     }
   });
 
   acpProcess.on('error', (err) => {
-    const hadSession = acpHasSession;
-    acpProcess = null;
-    acpSessionId = null;
-    acpMessageId = 1;
-    acpPendingResolves = {};
-    acpPermissionRequestIds = {};
-    acpReadyPromise = null;
-    acpHasSession = false;
-    if (hadSession && mainWindow) mainWindow.webContents.send('gemini:stream', { type: 'error', content: err.message });
+    const hadSessions = Object.keys(acpSessions).length > 0;
+    resetACPState();
+    if (hadSessions && mainWindow) mainWindow.webContents.send('gemini:stream', { type: 'error', content: err.message });
   });
 
   // Wait for process to be ready before sending init
@@ -379,23 +543,61 @@ async function spawnACPProcess(options) {
   });
 }
 
-// Create ACP session (fast, called before first message)
-async function ensureACPSession(workingDir) {
-  if (acpSessionId) return;
+// Create ACP session for a UI session (fast)
+async function createACPSession(uiSessionId, workingDir) {
   const sessionResult = await sendACPRequest('session/new', {
-    cwd: workingDir || process.cwd(),
+    cwd: workingDir || os.tmpdir(),
     mcpServers: []
   });
-  acpSessionId = sessionResult.sessionId;
-  acpHasSession = true;
+  acpSessions[uiSessionId] = sessionResult.sessionId;
+  return sessionResult.sessionId;
 }
 
-// Preload ACP process in background (spawn + init + session)
+// Ask an ACP session to summarize itself. Returns summary text or null on timeout.
+async function summarizeACPSession(acpId, timeoutMs = 10000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      acpSummaryInterceptor = null;
+      resolve(null);
+    }, timeoutMs);
+    let summary = '';
+
+    const summarySessionId = acpId;
+    const onSummaryChunk = (msg) => {
+      if (msg.method === 'session/update' && msg.params) {
+        if (msg.params.sessionId === summarySessionId) {
+          const update = msg.params.update;
+          if (update && update.sessionUpdate === 'agent_message_chunk' && update.content && update.content.text) {
+            summary += update.content.text;
+          }
+          return true; // consumed
+        }
+      }
+      return false; // not consumed
+    };
+
+    // Store the interceptor so handleACPMessage can check it
+    acpSummaryInterceptor = onSummaryChunk;
+
+    sendACPRequest('session/prompt', {
+      sessionId: acpId,
+      prompt: [{ type: 'text', text: 'Summarize our conversation so far in 2-3 concise paragraphs. Include: what was discussed, any decisions made, current state of any tasks, and any pending items. This summary will be used to restore context in a future session.' }]
+    }).then(() => {
+      clearTimeout(timer);
+      acpSummaryInterceptor = null;
+      resolve(summary || null);
+    }).catch(() => {
+      clearTimeout(timer);
+      acpSummaryInterceptor = null;
+      resolve(null);
+    });
+  });
+}
+
+// Preload ACP process in background (spawn + init only, sessions created on demand)
 ipcMain.handle('gemini:preloadACP', async (_, options) => {
   if (acpProcess || acpReadyPromise) return;
-  acpReadyPromise = spawnACPProcess(options).then(async () => {
-    // Pre-create session so first message is instant
-    await ensureACPSession(options.workingDir || process.cwd());
+  acpReadyPromise = spawnACPProcess(options).then(() => {
     acpReadyPromise = null;
     if (mainWindow) mainWindow.webContents.send('gemini:ready');
   }).catch(() => {
@@ -408,14 +610,25 @@ ipcMain.handle('gemini:sendMessage', async (event, { message, workingDir, option
   // ACP mode: bidirectional communication via stdin/stdout
   if (options.useACP) {
     try {
-      // Wait for preload if in-flight, or spawn fresh
       if (acpReadyPromise) {
         await acpReadyPromise;
       }
       if (!acpProcess) {
         await spawnACPProcess(options);
       }
-      await ensureACPSession(workingDir);
+
+      const uiSessionId = options.uiSessionId;
+      if (!uiSessionId) {
+        return { output: '', error: 'No uiSessionId provided', code: 1 };
+      }
+
+      // Create ACP session if this UI session doesn't have one yet
+      if (!acpSessions[uiSessionId]) {
+        await createACPSession(uiSessionId, workingDir);
+      }
+
+      const acpSessionId = acpSessions[uiSessionId];
+      acpActiveUISession = uiSessionId;
 
       const promptContent = [];
       if (options.imageAttachments && options.imageAttachments.length > 0) {
@@ -431,12 +644,10 @@ ipcMain.handle('gemini:sendMessage', async (event, { message, workingDir, option
         promptContent.push({ type: 'text', text: message });
       }
 
-      // Send prompt — don't await; responses stream via session/update notifications
       sendACPRequest('session/prompt', {
         sessionId: acpSessionId,
         prompt: promptContent
       }).then(() => {
-        // session/prompt resolves when the turn is complete
         mainWindow.webContents.send('gemini:stream', { type: 'result', stats: {} });
         mainWindow.webContents.send('gemini:stream', { type: 'done', code: 0, error: '' });
       }).catch((err) => {
@@ -565,16 +776,9 @@ ipcMain.handle('gemini:sendMessage', async (event, { message, workingDir, option
   });
 });
 
-// Reset ACP session for new chat (keeps process alive, pre-creates new session)
-ipcMain.handle('gemini:resetSession', async (_, workingDir) => {
-  acpSessionId = null;
-  acpHasSession = false;
-  // Pre-create new session immediately so next message is instant
-  if (acpProcess) {
-    try {
-      await ensureACPSession(workingDir || process.cwd());
-    } catch (e) { /* session will be created on next message */ }
-  }
+// Set which UI session receives stream events
+ipcMain.handle('gemini:setActiveSession', (_, uiSessionId) => {
+  acpActiveUISession = uiSessionId;
   return true;
 });
 
@@ -582,19 +786,11 @@ ipcMain.handle('gemini:resetSession', async (_, workingDir) => {
 ipcMain.handle('gemini:cancel', () => {
   if (acpProcess) {
     acpCancelled = true;
-    // Clear pending resolves without rejecting (prevents error cascades)
-    acpPendingResolves = {};
     // Send single clean done event
     mainWindow.webContents.send('gemini:stream', { type: 'done', code: 0, error: '' });
     // Kill process tree on Windows
     try { spawn('taskkill', ['/PID', String(acpProcess.pid), '/T', '/F'], { shell: true }); } catch (e) {}
-    acpProcess = null;
-    acpSessionId = null;
-    acpMessageId = 1;
-    acpPendingResolves = {};
-    acpPermissionRequestIds = {};
-    acpReadyPromise = null;
-    acpHasSession = false;
+    resetACPState();
     return true;
   }
   if (activeProcess) {
@@ -603,6 +799,14 @@ ipcMain.handle('gemini:cancel', () => {
     return true;
   }
   return false;
+});
+
+// Silently kill ACP process (for model switch — no stream events)
+ipcMain.handle('gemini:killACP', () => {
+  if (acpProcess) {
+    try { spawn('taskkill', ['/PID', String(acpProcess.pid), '/T', '/F'], { shell: true }); } catch (e) {}
+    resetACPState();
+  }
 });
 
 // Write to stdin of active process

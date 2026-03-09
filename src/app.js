@@ -28,7 +28,12 @@ const state = {
   sessionFilter: 'all',
   sessionSearchQuery: '',
   theme: localStorage.getItem('geminui-theme') || 'dark',
-  mode: 'chat'
+  mode: 'chat',
+  chatSessions: [],
+  chatSessionId: null,
+  chatModel: 'gemini-3-flash-preview',
+  chatReady: false,
+  chatStreaming: false,
 };
 
 // Load saved state
@@ -40,7 +45,10 @@ function loadState() {
       if (parsed.settings) Object.assign(state.settings, parsed.settings);
       if (parsed.workingDir) state.workingDir = parsed.workingDir;
       if (parsed.sessions) state.sessions = parsed.sessions;
+      // Clear transient ACP session state from previous app run
+      state.sessions.forEach(s => { delete s.acpSessionId; });
       if (parsed.mode) state.mode = parsed.mode;
+      if (parsed.chatModel) state.chatModel = parsed.chatModel;
     }
   } catch (e) {
     console.error('Failed to load state:', e);
@@ -53,6 +61,7 @@ function saveState() {
       settings: state.settings,
       workingDir: state.workingDir,
       mode: state.mode,
+      chatModel: state.chatModel,
       sessions: state.sessions.map(s => ({
         ...s,
         messages: s.messages.slice(-50)
@@ -112,21 +121,25 @@ const elements = {
   welcomeTitle: $('#welcome-title'),
   welcomeSubtitle: $('#welcome-subtitle'),
   welcomeActionsCowork: $('#welcome-actions-cowork'),
-  welcomeSuggestionsCowork: $('#welcome-suggestions-cowork'),
-  welcomeChatInput: $('#welcome-chat-input'),
-  welcomeChatTextarea: $('#welcome-chat-textarea'),
-  welcomeChatSend: $('#welcome-chat-send'),
   btnExtensions: $('#btn-extensions'),
   extensionsModal: $('#extensions-modal'),
   btnCloseExtensions: $('#btn-close-extensions'),
   extensionSearch: $('#extension-search'),
-  extensionsGrid: $('#extensions-grid')
+  extensionsGrid: $('#extensions-grid'),
+  chatView: $('#chat-view'),
+  chatMessages: $('#chat-messages'),
+  chatMessagesArea: $('#chat-messages-area'),
+  chatInput: $('#chat-input'),
+  chatSend: $('#chat-send'),
+  chatModelSelect: $('#chat-model-select'),
+  chatStatus: $('#chat-status'),
 };
 
 // ============================================
-// Thinking timer
+// Thinking timer & thought tracking
 let thinkingStartTime = null;
 let thinkingInterval = null;
+let thoughtBuffer = '';
 let extensionsData = null;
 let installedExtensions = new Set();
 
@@ -155,39 +168,38 @@ function switchMode(mode, isInit) {
   if (!isInit) {
     state.activeSessionId = null;
     state.messageCount = 0;
-    geminiAPI.resetSession(state.workingDir || undefined);
+    geminiAPI.setActiveSession(null);
   }
 
-  // Update toggle buttons
   elements.modeToggle.querySelectorAll('.mode-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mode === mode);
   });
 
-  // Update sidebar button label
-  elements.btnNewTaskLabel.textContent = mode === 'chat' ? 'New Chat' : 'New Task';
-
-  // Update welcome screen
   const isChat = mode === 'chat';
+
+  elements.chatView.style.display = isChat ? 'flex' : 'none';
+  document.getElementById('main-content').style.display = isChat ? 'none' : '';
+
+  elements.btnNewTaskLabel.textContent = isChat ? 'New Chat' : 'New Task';
   elements.welcomeTitle.textContent = isChat ? 'How can I help you?' : 'Welcome to GeminUI';
   elements.welcomeSubtitle.textContent = isChat ? '' : 'Your AI desktop assistant powered by Gemini';
   elements.welcomeSubtitle.style.display = isChat ? 'none' : '';
   elements.welcomeActionsCowork.style.display = isChat ? 'none' : '';
-  elements.welcomeSuggestionsCowork.style.display = isChat ? 'none' : '';
-  elements.welcomeChatInput.style.display = isChat ? '' : 'none';
-  // Show warmup indicator in both modes until CLI is ready
-  document.getElementById('setup-check').style.display = (isChat && state.cliReady) ? 'none' : '';
+  document.getElementById('setup-check').style.display = isChat ? 'none' : '';
 
-  // Update task header folder display visibility
   const folderHeader = document.getElementById('current-folder-display');
   if (folderHeader) folderHeader.style.display = isChat ? 'none' : '';
 
-  // Update task screen input placeholder
-  elements.messageInput.placeholder = isChat ? 'Ask anything...' : 'Describe your task...';
+  elements.messageInput.placeholder = 'Describe your task...';
 
   renderSessions();
   if (!isInit) {
-    clearMessages();
-    showWelcomeScreen();
+    if (isChat) {
+      initChat();
+    } else {
+      clearMessages();
+      showWelcomeScreen();
+    }
   }
   saveState();
 }
@@ -199,10 +211,15 @@ function switchMode(mode, isInit) {
 async function init() {
   loadState();
   applyTheme();
+  initChatStream();
   bindEvents();
   applySettings();
   switchMode(state.mode, true);
   renderSessions();
+
+  if (state.mode === 'chat') {
+    initChat();
+  }
 
   const version = await geminiAPI.checkInstalled();
   const setupIcon = elements.setupGemini.querySelector('.setup-icon');
@@ -236,6 +253,7 @@ async function init() {
       showTaskScreen();
       renderMessages(session);
     }
+    geminiAPI.setActiveSession(state.activeSessionId);
   }
 
   // Always preload ACP process in background so first query is instant
@@ -255,10 +273,20 @@ async function init() {
       apiKey: state.settings.apiKey || undefined,
       model: state.settings.model || undefined,
       sandbox: state.settings.sandbox,
-      subagents: state.settings.subagents,
-      workingDir: state.workingDir || undefined
+      subagents: state.settings.subagents
     });
   }
+
+  geminiAPI.onShutdownSummaries((summaries) => {
+    for (const [sessionId, summary] of Object.entries(summaries)) {
+      const session = state.sessions.find(s => s.id === sessionId);
+      if (session) {
+        session.summary = summary;
+      }
+    }
+    saveState();
+  });
+
 }
 
 // ============================================
@@ -280,21 +308,6 @@ function bindEvents() {
     if (btn && btn.dataset.mode !== state.mode) {
       switchMode(btn.dataset.mode);
     }
-  });
-
-  // Welcome chat input
-  elements.welcomeChatTextarea.addEventListener('input', () => {
-    autoResizeTextarea(elements.welcomeChatTextarea);
-    elements.welcomeChatSend.disabled = !elements.welcomeChatTextarea.value.trim();
-  });
-  elements.welcomeChatTextarea.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      if (elements.welcomeChatTextarea.value.trim()) sendFromWelcomeChat();
-    }
-  });
-  elements.welcomeChatSend.addEventListener('click', () => {
-    if (elements.welcomeChatTextarea.value.trim()) sendFromWelcomeChat();
   });
 
   elements.btnSelectFolder.addEventListener('click', selectFolder);
@@ -365,31 +378,12 @@ function bindEvents() {
   });
 
   elements.btnCancelTask.addEventListener('click', async () => {
+    if (state.mode === 'chat' && state.chatStreaming) {
+      geminiAPI.chatCancel();
+      return;
+    }
     await geminiAPI.cancel();
     finishStreaming();
-  });
-
-  document.querySelectorAll('.suggestion-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      const prompt = chip.dataset.prompt;
-      const chipMode = chip.dataset.mode || state.mode;
-
-      if (chipMode === 'chat' || state.workingDir) {
-        elements.messageInput.value = prompt;
-        showTaskScreen();
-        if (!state.activeSessionId) createNewSession();
-        sendMessage();
-      } else {
-        selectFolder().then(() => {
-          if (state.workingDir) {
-            elements.messageInput.value = prompt;
-            showTaskScreen();
-            if (!state.activeSessionId) createNewSession();
-            sendMessage();
-          }
-        });
-      }
-    });
   });
 
   // Handle link-text clicks to open URLs externally
@@ -431,25 +425,26 @@ function bindEvents() {
     }
   });
 
-  // Model toggle (input footer)
-  elements.modelToggle.addEventListener('click', (e) => {
-    const btn = e.target.closest('.model-toggle-btn');
+  // Model toggle handler (shared)
+  function handleModelToggle(e, selector) {
+    const btn = e.target.closest(selector);
     if (!btn) return;
+    const oldModel = state.settings.model;
     state.settings.model = btn.dataset.model;
     updateModelToggleUI();
     updateModelBadge();
     saveState();
-  });
+    // Kill ACP process silently so it respawns with the new model
+    if (oldModel !== state.settings.model) {
+      geminiAPI.killACP();
+    }
+  }
+
+  // Model toggle (input footer)
+  elements.modelToggle.addEventListener('click', (e) => handleModelToggle(e, '.model-toggle-btn'));
 
   // Model toggle (settings)
-  elements.settingModelToggle.addEventListener('click', (e) => {
-    const btn = e.target.closest('.setting-model-btn');
-    if (!btn) return;
-    state.settings.model = btn.dataset.model;
-    updateModelToggleUI();
-    updateModelBadge();
-    saveState();
-  });
+  elements.settingModelToggle.addEventListener('click', (e) => handleModelToggle(e, '.setting-model-btn'));
 
   // Theme toggle
   elements.btnTheme.addEventListener('click', () => {
@@ -493,6 +488,25 @@ function bindEvents() {
     if (files.length) renderAttachedFiles();
   });
 
+  // Chat input
+  elements.chatInput.addEventListener('input', () => {
+    autoResizeTextarea(elements.chatInput);
+    elements.chatSend.disabled = !elements.chatInput.value.trim() || state.chatStreaming;
+  });
+
+  elements.chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
+
+  elements.chatSend.addEventListener('click', sendChatMessage);
+
+  elements.chatModelSelect.addEventListener('change', (e) => {
+    state.chatModel = e.target.value;
+  });
+
   geminiAPI.onStream(handleStreamEvent);
 }
 
@@ -511,6 +525,7 @@ function applyTheme() {
     elements.themeIconDark.style.display = '';
     elements.themeLabel.textContent = 'Dark Mode';
   }
+
 }
 
 // ============================================
@@ -544,8 +559,13 @@ function updateFolderDisplay() {
 // ============================================
 
 function createNewSession() {
-  // Reset ACP session for new conversation (keeps process warm)
-  geminiAPI.resetSession(state.workingDir || undefined);
+  if (state.mode === 'chat') {
+    state.chatSessionId = crypto.randomUUID();
+    elements.chatMessages.textContent = '';
+    elements.chatInput.focus();
+    loadChatSessions();
+    return;
+  }
 
   const session = {
     id: Date.now().toString(),
@@ -553,11 +573,13 @@ function createNewSession() {
     mode: state.mode,
     messages: [],
     isResume: false,
-    archived: false
+    archived: false,
+    summary: null
   };
   state.sessions.unshift(session);
   state.activeSessionId = session.id;
   state.messageCount = 0;
+  geminiAPI.setActiveSession(session.id);
   renderSessions();
   clearMessages();
   showTaskScreen();
@@ -573,6 +595,7 @@ function deleteSession(sessionId) {
   state.sessions = state.sessions.filter(s => s.id !== sessionId);
   if (state.activeSessionId === sessionId) {
     state.activeSessionId = state.sessions.length > 0 ? state.sessions[0].id : null;
+    geminiAPI.setActiveSession(state.activeSessionId);
     if (state.activeSessionId) {
       const session = state.sessions.find(s => s.id === state.activeSessionId);
       renderMessages(session);
@@ -583,6 +606,361 @@ function deleteSession(sessionId) {
   }
   renderSessions();
   saveState();
+}
+
+// ============================================
+// Chat Mode — init, sessions, sending, streaming
+// ============================================
+
+async function initChat() {
+  if (state.chatReady) {
+    loadChatSessions();
+    return;
+  }
+
+  elements.chatStatus.textContent = 'Connecting...';
+  const result = await geminiAPI.chatInit();
+
+  if (result.error === 'NO_CREDENTIALS') {
+    const banner = document.createElement('div');
+    banner.className = 'chat-auth-banner';
+    banner.textContent = 'No Google credentials found. Run ';
+    const code = document.createElement('code');
+    code.textContent = 'gemini auth';
+    banner.appendChild(code);
+    banner.appendChild(document.createTextNode(' in your terminal to sign in.'));
+    elements.chatMessages.textContent = '';
+    elements.chatMessages.appendChild(banner);
+    elements.chatInput.disabled = true;
+    return;
+  }
+  if (result.error) {
+    const errDiv = document.createElement('div');
+    errDiv.className = 'chat-error';
+    errDiv.textContent = 'Failed to connect: ' + result.error;
+    elements.chatMessages.textContent = '';
+    elements.chatMessages.appendChild(errDiv);
+    return;
+  }
+
+  state.chatReady = true;
+  elements.chatStatus.textContent = '';
+  elements.chatInput.disabled = false;
+  loadChatSessions();
+}
+
+async function loadChatSessions() {
+  state.chatSessions = await geminiAPI.chatListSessions();
+  renderChatSessions();
+}
+
+function renderChatSessions() {
+  elements.sessionsList.textContent = '';
+
+  if (state.chatSessions.length === 0) {
+    const empty = createEl('div', 'sessions-empty', 'No conversations yet');
+    elements.sessionsList.appendChild(empty);
+    return;
+  }
+
+  let filtered = state.chatSessions;
+  if (state.sessionSearchQuery) {
+    filtered = filtered.filter(s =>
+      s.title.toLowerCase().includes(state.sessionSearchQuery)
+    );
+  }
+
+  filtered.forEach(s => {
+    const btn = createEl('button', 'session-item');
+    if (s.id === state.chatSessionId) btn.classList.add('active');
+
+    const dot = createEl('span', 'session-dot');
+    const label = createEl('span', 'session-label', s.title);
+    const delBtn = createEl('button', 'session-delete', '\u00D7');
+    delBtn.title = 'Delete';
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm('Delete "' + s.title + '"?')) return;
+      await geminiAPI.chatDeleteSession(s.id);
+      if (state.chatSessionId === s.id) {
+        state.chatSessionId = null;
+        elements.chatMessages.textContent = '';
+      }
+      loadChatSessions();
+    });
+
+    btn.appendChild(dot);
+    btn.appendChild(label);
+    btn.appendChild(delBtn);
+    btn.addEventListener('click', () => switchToChatSession(s.id));
+    elements.sessionsList.appendChild(btn);
+  });
+}
+
+async function switchToChatSession(sessionId) {
+  const session = await geminiAPI.chatLoadSession(sessionId);
+  if (!session) return;
+
+  state.chatSessionId = session.id;
+  state.chatModel = session.model || 'gemini-3-flash-preview';
+  elements.chatModelSelect.value = state.chatModel;
+
+  elements.chatMessages.textContent = '';
+  if (session.messages) {
+    session.messages.forEach(msg => appendChatMessage(msg));
+  }
+  chatScrollToBottom();
+  renderChatSessions();
+}
+
+async function sendChatMessage() {
+  const text = elements.chatInput.value.trim();
+  if (!text || state.chatStreaming) return;
+
+  if (!state.chatSessionId) {
+    state.chatSessionId = crypto.randomUUID();
+  }
+
+  let session = await geminiAPI.chatLoadSession(state.chatSessionId);
+  if (!session) {
+    session = {
+      id: state.chatSessionId,
+      title: text.length > 40 ? text.substring(0, 40) + '...' : text,
+      model: state.chatModel,
+      createdAt: Date.now(),
+      lastUsedAt: Date.now(),
+      messages: [],
+    };
+  }
+
+  const userContent = { role: 'user', parts: [{ text }] };
+  session.messages.push(userContent);
+  appendChatMessage(userContent);
+
+  elements.chatInput.value = '';
+  autoResizeTextarea(elements.chatInput);
+  elements.chatSend.disabled = true;
+
+  state.chatStreaming = true;
+  elements.chatStatus.textContent = 'Thinking...';
+
+  const modelMsg = { role: 'model', parts: [] };
+  appendChatMessage(modelMsg, true);
+
+  let systemInstruction = undefined;
+  if (state.settings.instructions) {
+    systemInstruction = { role: 'user', parts: [{ text: state.settings.instructions }] };
+  }
+
+  const sendResult = await geminiAPI.chatSend({
+    model: state.chatModel,
+    contents: [userContent],
+    sessionId: state.chatSessionId,
+    systemInstruction,
+  });
+
+  if (sendResult && sendResult.error) {
+    state.chatStreaming = false;
+    elements.chatStatus.textContent = '';
+    elements.chatSend.disabled = !elements.chatInput.value.trim();
+    const errDiv = document.createElement('div');
+    errDiv.className = 'chat-error';
+    errDiv.textContent = 'Error: ' + sendResult.error;
+    elements.chatMessages.appendChild(errDiv);
+    if (chatStreamEl) chatStreamEl.remove();
+    chatStreamEl = null;
+    return;
+  }
+
+  session.model = state.chatModel;
+  await geminiAPI.chatSaveSession(session);
+  loadChatSessions();
+}
+
+let chatStreamEl = null;
+let chatThinkingEl = null;
+let chatStreamText = '';
+let chatThinkingText = '';
+let chatStreamSession = null;
+
+function initChatStream() {
+  geminiAPI.onChatStream(async (data) => {
+    if (data.done) {
+      if (chatStreamSession) {
+        const modelMsg = { role: 'model', parts: [] };
+        if (chatThinkingText) modelMsg.parts.push({ thought: chatThinkingText });
+        if (chatStreamText) modelMsg.parts.push({ text: chatStreamText });
+        chatStreamSession.messages.push(modelMsg);
+        await geminiAPI.chatSaveSession(chatStreamSession);
+      }
+
+      if (chatThinkingEl) {
+        chatThinkingEl.classList.add('collapsed');
+        chatThinkingEl.classList.remove('streaming');
+        const label = chatThinkingEl.querySelector('.chat-thinking-label');
+        if (label) {
+          const words = chatThinkingText.split(/\s+/).length;
+          label.textContent = 'Thinking (' + words + (words === 1 ? ' word' : ' words') + ')';
+        }
+      }
+
+      if (chatStreamEl) {
+        const cursor = chatStreamEl.querySelector('.chat-cursor');
+        if (cursor) cursor.remove();
+      }
+
+      state.chatStreaming = false;
+      elements.chatStatus.textContent = '';
+      elements.chatSend.disabled = !elements.chatInput.value.trim();
+      chatStreamEl = null;
+      chatThinkingEl = null;
+      chatStreamText = '';
+      chatThinkingText = '';
+      chatStreamSession = null;
+      return;
+    }
+
+    if (data.error) {
+      const errDiv = document.createElement('div');
+      errDiv.className = 'chat-error';
+      errDiv.textContent = data.message || 'Stream error';
+      elements.chatMessages.appendChild(errDiv);
+      state.chatStreaming = false;
+      elements.chatStatus.textContent = '';
+      elements.chatSend.disabled = !elements.chatInput.value.trim();
+      return;
+    }
+
+    const resp = data.response;
+    if (!resp || !resp.candidates || !resp.candidates[0]) return;
+
+    const parts = resp.candidates[0].content?.parts || [];
+    for (const part of parts) {
+      if (part.thought) {
+        chatThinkingText += part.thought;
+        if (!chatThinkingEl && chatStreamEl) {
+          chatThinkingEl = createThinkingBlock();
+          const body = chatStreamEl.querySelector('.chat-msg-body');
+          body.insertBefore(chatThinkingEl, body.firstChild);
+        }
+        if (chatThinkingEl) {
+          chatThinkingEl.querySelector('.chat-thinking-body').textContent = chatThinkingText;
+        }
+        elements.chatStatus.textContent = 'Thinking...';
+      } else if (part.text) {
+        chatStreamText += part.text;
+        if (chatStreamEl) {
+          const body = chatStreamEl.querySelector('.chat-msg-body');
+          let textContainer = body.querySelector('.chat-text-content');
+          if (!textContainer) {
+            textContainer = document.createElement('div');
+            textContainer.className = 'chat-text-content';
+            body.appendChild(textContainer);
+          }
+          // Safe: parseMarkdown uses DOMPurify (preload.js)
+          const sanitized = geminiAPI.parseMarkdown(chatStreamText);
+          textContainer.innerHTML = sanitized;
+          if (!textContainer.querySelector('.chat-cursor')) {
+            const cursor = document.createElement('span');
+            cursor.className = 'chat-cursor';
+            textContainer.appendChild(cursor);
+          }
+        }
+        elements.chatStatus.textContent = 'Generating...';
+      }
+    }
+
+    chatScrollToBottom();
+
+    if (!chatStreamSession && state.chatSessionId) {
+      chatStreamSession = await geminiAPI.chatLoadSession(state.chatSessionId);
+    }
+  });
+}
+
+function appendChatMessage(msg, isStreaming = false) {
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + msg.role;
+
+  const header = document.createElement('div');
+  header.className = 'chat-msg-header';
+
+  if (msg.role === 'user') {
+    header.textContent = 'You';
+  } else {
+    header.textContent = 'Gemini';
+    if (state.chatModel) {
+      const label = document.createElement('span');
+      label.className = 'model-label';
+      label.textContent = state.chatModel.includes('pro') ? 'Pro' : 'Flash';
+      header.appendChild(label);
+    }
+  }
+
+  const body = document.createElement('div');
+  body.className = 'chat-msg-body';
+
+  if (msg.role === 'user') {
+    body.textContent = msg.parts.map(p => p.text || '').join('');
+  } else if (!isStreaming) {
+    for (const part of msg.parts) {
+      if (part.thought) {
+        body.appendChild(createThinkingBlock(part.thought, true));
+      } else if (part.text) {
+        const textDiv = document.createElement('div');
+        textDiv.className = 'chat-text-content';
+        // Safe: parseMarkdown uses DOMPurify (preload.js)
+        const sanitized = geminiAPI.parseMarkdown(part.text);
+        textDiv.innerHTML = sanitized;
+        body.appendChild(textDiv);
+      }
+    }
+  }
+
+  div.appendChild(header);
+  div.appendChild(body);
+  elements.chatMessages.appendChild(div);
+  chatScrollToBottom();
+
+  if (isStreaming) chatStreamEl = div;
+  return div;
+}
+
+function createThinkingBlock(text, collapsed = false) {
+  const block = document.createElement('div');
+  block.className = 'chat-thinking' + (collapsed ? ' collapsed' : ' streaming');
+
+  const header = document.createElement('div');
+  header.className = 'chat-thinking-header';
+
+  const toggle = document.createElement('span');
+  toggle.className = 'chat-thinking-toggle';
+  toggle.textContent = '\u25BC';
+
+  const label = document.createElement('span');
+  label.className = 'chat-thinking-label';
+  label.textContent = 'Thinking...';
+
+  header.appendChild(toggle);
+  header.appendChild(label);
+  header.addEventListener('click', () => block.classList.toggle('collapsed'));
+
+  const body = document.createElement('div');
+  body.className = 'chat-thinking-body';
+  if (text) body.textContent = text;
+
+  if (collapsed && text) {
+    const words = text.split(/\s+/).length;
+    label.textContent = 'Thinking (' + words + (words === 1 ? ' word' : ' words') + ')';
+  }
+
+  block.appendChild(header);
+  block.appendChild(body);
+  return block;
+}
+
+function chatScrollToBottom() {
+  elements.chatMessagesArea.scrollTop = elements.chatMessagesArea.scrollHeight;
 }
 
 function showWelcomeScreen() {
@@ -596,6 +974,7 @@ function switchToSession(sessionId) {
 
   state.activeSessionId = sessionId;
   state.messageCount = session.messages.filter(m => m.role === 'user').length;
+  geminiAPI.setActiveSession(sessionId);
   renderSessions();
   showTaskScreen();
   renderMessages(session);
@@ -603,6 +982,11 @@ function switchToSession(sessionId) {
 }
 
 function renderSessions() {
+  if (state.mode === 'chat') {
+    renderChatSessions();
+    return;
+  }
+
   elements.sessionsList.textContent = '';
 
   let filtered = state.sessions.filter(s => (s.mode || 'cowork') === state.mode);
@@ -787,13 +1171,35 @@ function addThinkingIndicator() {
 
   const body = createEl('div', 'message-body');
   const roleLabel = createEl('div', 'message-role', 'Gemini');
+
   const indicator = createEl('div', 'thinking-indicator');
+
+  // Header row: chevron + status text + timer
+  const header = createEl('div', 'thinking-header');
+  const chevron = createEl('span', 'thinking-chevron', '\u25B6');
+  chevron.id = 'thinking-chevron';
+  const statusText = createEl('span', 'thinking-status', 'Thinking');
+  statusText.id = 'thinking-status';
   const dots = createEl('div', 'thinking-dots');
   for (let i = 0; i < 3; i++) dots.appendChild(createEl('span'));
-  indicator.appendChild(dots);
-  const timerSpan = createEl('span', 'thinking-timer', 'Thinking... 0s');
+  const timerSpan = createEl('span', 'thinking-timer', '0s');
   timerSpan.id = 'thinking-timer';
-  indicator.appendChild(timerSpan);
+
+  header.appendChild(chevron);
+  header.appendChild(statusText);
+  header.appendChild(dots);
+  header.appendChild(timerSpan);
+  header.style.cursor = 'pointer';
+  header.addEventListener('click', () => {
+    indicator.classList.toggle('expanded');
+  });
+
+  // Expandable thought content
+  const thoughtContent = createEl('div', 'thinking-content');
+  thoughtContent.id = 'thinking-content';
+
+  indicator.appendChild(header);
+  indicator.appendChild(thoughtContent);
 
   body.appendChild(roleLabel);
   body.appendChild(indicator);
@@ -803,19 +1209,46 @@ function addThinkingIndicator() {
   elements.messagesContainer.appendChild(msgEl);
   scrollToBottom();
 
+  thoughtBuffer = '';
   thinkingStartTime = Date.now();
   thinkingInterval = setInterval(() => {
     const elapsed = Math.floor((Date.now() - thinkingStartTime) / 1000);
     const timer = document.getElementById('thinking-timer');
-    if (timer) timer.textContent = 'Thinking... ' + elapsed + 's';
+    if (timer) timer.textContent = elapsed + 's';
   }, 1000);
 }
 
 function removeThinkingIndicator() {
   if (thinkingInterval) { clearInterval(thinkingInterval); thinkingInterval = null; }
   thinkingStartTime = null;
+  thoughtBuffer = '';
   const el = document.getElementById('thinking-indicator');
   if (el) el.remove();
+}
+
+function handleThoughtChunk(text) {
+  thoughtBuffer += text;
+
+  const statusEl = document.getElementById('thinking-status');
+  if (statusEl) {
+    const lines = thoughtBuffer.split('\n').map(l => l.trim()).filter(l => l.length > 5);
+    if (lines.length > 0) {
+      let lastLine = lines[lines.length - 1];
+      if (lastLine.length > 80) lastLine = lastLine.slice(0, 77) + '\u2026';
+      statusEl.textContent = lastLine;
+    }
+  }
+
+  const contentEl = document.getElementById('thinking-content');
+  if (contentEl) {
+    // parseMarkdown runs through DOMPurify — safe for innerHTML
+    contentEl.innerHTML = geminiAPI.parseMarkdown(thoughtBuffer);
+  }
+
+  const chevron = document.getElementById('thinking-chevron');
+  if (chevron) chevron.classList.add('has-content');
+
+  scrollToBottom();
 }
 
 // ============================================
@@ -824,20 +1257,6 @@ function removeThinkingIndicator() {
 
 let streamBuffer = '';
 let streamMessageEl = null;
-
-function sendFromWelcomeChat() {
-  const text = elements.welcomeChatTextarea.value.trim();
-  if (!text) return;
-
-  // Create session, switch to task screen, populate input, and send
-  createNewSession();
-  showTaskScreen();
-  elements.messageInput.value = text;
-  elements.welcomeChatTextarea.value = '';
-  elements.welcomeChatSend.disabled = true;
-  autoResizeTextarea(elements.welcomeChatTextarea);
-  sendMessage();
-}
 
 async function sendMessage() {
   const message = elements.messageInput.value.trim();
@@ -858,11 +1277,22 @@ async function sendMessage() {
   let fullMessage = message;
   if (state.messageCount === 0) {
     let prefix = '';
+
+    // Re-inject summary from previous app run
+    if (session && session.summary) {
+      prefix += `[Previous conversation summary]:\n${session.summary}\n\n[New message]:\n`;
+    } else if (session && !session.summary && session.messages.length > 0) {
+      // Crash recovery: no summary, use last 10 messages as context
+      const recent = session.messages.slice(-10);
+      const context = recent.map(m => `${m.role}: ${m.content}`).join('\n\n');
+      prefix += `[Previous conversation context]:\n${context}\n\n[New message]:\n`;
+    }
+
     if (isCowork && state.folderInstructions) {
       prefix += `[Project Instructions from GEMINI.md]:\n${state.folderInstructions}\n\n`;
     }
     if (state.settings.instructions) {
-      prefix += `[System Instructions: ${state.settings.instructions}]\n\n`;
+      prefix += `[User Instructions]:\n${state.settings.instructions}\n\n`;
     }
     if (prefix) fullMessage = prefix + message;
   }
@@ -930,7 +1360,7 @@ async function sendMessage() {
     subagents: state.settings.subagents,
     useACP: true,
     imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
-    resume: state.messageCount > 0
+    uiSessionId: state.activeSessionId
   };
 
   state.messageCount++;
@@ -978,6 +1408,12 @@ function handleStreamEvent(event) {
       if (event.model) {
         elements.modelBadge.textContent = event.model;
       }
+      break;
+    }
+
+    // ACP: model thinking/reasoning chunk
+    case 'thought': {
+      handleThoughtChunk(event.content || '');
       break;
     }
 

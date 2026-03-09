@@ -42,6 +42,9 @@ contextBridge.exposeInMainWorld('geminiAPI', {
   onReady: (callback) => {
     ipcRenderer.on('gemini:ready', () => callback());
   },
+  onShutdownSummaries: (callback) => {
+    ipcRenderer.on('gemini:shutdown-summaries', (_, summaries) => callback(summaries));
+  },
 
   // File attachments
   copyToWorkDir: (files, workingDir) => ipcRenderer.invoke('files:copyToWorkDir', { files, workingDir }),
@@ -59,7 +62,8 @@ contextBridge.exposeInMainWorld('geminiAPI', {
 
   // ACP mode
   preloadACP: (options) => ipcRenderer.invoke('gemini:preloadACP', options),
-  resetSession: (workingDir) => ipcRenderer.invoke('gemini:resetSession', workingDir),
+  setActiveSession: (uiSessionId) => ipcRenderer.invoke('gemini:setActiveSession', uiSessionId),
+  killACP: () => ipcRenderer.invoke('gemini:killACP'),
   respondPermission: (toolId, outcome) => ipcRenderer.invoke('gemini:respondPermission', { toolId, outcome }),
 
   // App settings (startup, tray)
@@ -70,6 +74,18 @@ contextBridge.exposeInMainWorld('geminiAPI', {
 
   // File utilities
   readFileBase64: (filePath) => ipcRenderer.invoke('files:readAsBase64', filePath),
+
+  // Chat API (Code Assist)
+  chatInit: () => ipcRenderer.invoke('chat:init'),
+  chatSend: (payload) => ipcRenderer.invoke('chat:send', payload),
+  chatCancel: () => ipcRenderer.invoke('chat:cancel'),
+  onChatStream: (callback) => {
+    ipcRenderer.on('chat:stream', (_, data) => callback(data));
+  },
+  chatListSessions: () => ipcRenderer.invoke('chat:sessions:list'),
+  chatLoadSession: (id) => ipcRenderer.invoke('chat:sessions:load', id),
+  chatSaveSession: (session) => ipcRenderer.invoke('chat:sessions:save', session),
+  chatDeleteSession: (id) => ipcRenderer.invoke('chat:sessions:delete', id),
 
   // Markdown parsing (sanitized)
   parseMarkdown: (text) => DOMPurify.sanitize(marked.parse(text))
