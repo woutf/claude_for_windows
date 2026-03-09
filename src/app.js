@@ -752,9 +752,15 @@ async function sendChatMessage() {
     systemInstruction = { role: 'user', parts: [{ text: state.settings.instructions }] };
   }
 
+  // Send full history so context survives model switches
+  const contents = session.messages.map(m => ({
+    role: m.role,
+    parts: m.parts.filter(p => !p.thought).map(p => ({ text: p.text || '' })),
+  }));
+
   const sendResult = await geminiAPI.chatSend({
     model: state.chatModel,
-    contents: [userContent],
+    contents,
     sessionId: state.chatSessionId,
     systemInstruction,
   });
@@ -836,8 +842,8 @@ function initChatStream() {
 
     const parts = resp.candidates[0].content?.parts || [];
     for (const part of parts) {
-      if (part.thought) {
-        chatThinkingText += part.thought;
+      if (part.thought && part.text) {
+        chatThinkingText += part.text;
         if (!chatThinkingEl && chatStreamEl) {
           chatThinkingEl = createThinkingBlock();
           const body = chatStreamEl.querySelector('.chat-msg-body');
