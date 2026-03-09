@@ -85,6 +85,7 @@ contextBridge.exposeInMainWorld('geminiAPI', {
   chatListSessions: () => ipcRenderer.invoke('chat:sessions:list'),
   chatLoadSession: (id) => ipcRenderer.invoke('chat:sessions:load', id),
   chatSaveSession: (session) => ipcRenderer.invoke('chat:sessions:save', session),
+  chatUpdateSession: (id, fields) => ipcRenderer.invoke('chat:sessions:update', { id, fields }),
   chatDeleteSession: (id) => ipcRenderer.invoke('chat:sessions:delete', id),
 
   // Markdown parsing (sanitized)

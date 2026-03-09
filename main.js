@@ -96,6 +96,8 @@ function listChatSessions() {
         model: data.model,
         createdAt: data.createdAt,
         lastUsedAt: data.lastUsedAt,
+        pinned: data.pinned || false,
+        archived: data.archived || false,
       });
     } catch (e) { /* skip corrupt files */ }
   }
@@ -269,6 +271,13 @@ ipcMain.handle('chat:cancel', () => {
 ipcMain.handle('chat:sessions:list', () => listChatSessions());
 ipcMain.handle('chat:sessions:load', (_, sessionId) => loadChatSession(sessionId));
 ipcMain.handle('chat:sessions:save', (_, session) => { saveChatSession(session); return { ok: true }; });
+ipcMain.handle('chat:sessions:update', (_, { id, fields }) => {
+  const session = loadChatSession(id);
+  if (!session) return { error: 'NOT_FOUND' };
+  Object.assign(session, fields);
+  saveChatSession(session);
+  return { ok: true };
+});
 ipcMain.handle('chat:sessions:delete', (_, sessionId) => { deleteChatSession(sessionId); return { ok: true }; });
 
 // Launch on startup

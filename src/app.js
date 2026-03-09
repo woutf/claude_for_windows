@@ -664,35 +664,73 @@ function renderChatSessions() {
   }
 
   let filtered = state.chatSessions;
+
+  // Filter by active/archived
+  if (state.sessionFilter === 'active') {
+    filtered = filtered.filter(s => !s.archived);
+  } else if (state.sessionFilter === 'archived') {
+    filtered = filtered.filter(s => s.archived);
+  }
+
   if (state.sessionSearchQuery) {
     filtered = filtered.filter(s =>
       s.title.toLowerCase().includes(state.sessionSearchQuery)
     );
   }
 
+  // Sort: pinned first, then by lastUsedAt descending
+  filtered.sort((a, b) => {
+    if ((a.pinned ? 1 : 0) !== (b.pinned ? 1 : 0)) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
+    return (b.lastUsedAt || 0) - (a.lastUsedAt || 0);
+  });
+
+  // Static trusted SVG for pin icon (same as Cowork sidebar)
+  const pinSvg = '<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M9.828.722a.5.5 0 01.354.146l4.95 4.95a.5.5 0 01-.707.707l-.71-.71-3.18 3.18a3.02 3.02 0 01-.38 3.306L8.5 14.06l-5.56-5.56 1.76-1.657a3.02 3.02 0 013.306-.38l3.18-3.18-.71-.71a.5.5 0 01.354-.854zM2.354 13.354l3-3-.707-.707-3 3a.5.5 0 00.707.707z"/></svg>';
+
   filtered.forEach(s => {
-    const btn = createEl('button', 'session-item');
-    if (s.id === state.chatSessionId) btn.classList.add('active');
+    const btn = createEl('button', `session-item${s.id === state.chatSessionId ? ' active' : ''}${s.pinned ? ' pinned' : ''}`);
 
     const dot = createEl('span', 'session-dot');
+    // Safe: static trusted SVG string, no user input
+    if (s.pinned) dot.innerHTML = pinSvg;
     const label = createEl('span', 'session-label', s.title);
-    const delBtn = createEl('button', 'session-delete', '\u00D7');
+
+    const pinBtn = createEl('span', 'session-pin', s.pinned ? '\u2716' : '\uD83D\uDCCC');
+    pinBtn.title = s.pinned ? 'Unpin' : 'Pin';
+    const archiveBtn = createEl('span', 'session-archive', s.archived ? '\u21A9' : '\u2193');
+    archiveBtn.title = s.archived ? 'Unarchive' : 'Archive';
+    const delBtn = createEl('span', 'session-delete', '\u00D7');
     delBtn.title = 'Delete';
-    delBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (!confirm('Delete "' + s.title + '"?')) return;
-      await geminiAPI.chatDeleteSession(s.id);
-      if (state.chatSessionId === s.id) {
-        state.chatSessionId = null;
-        elements.chatMessages.textContent = '';
-      }
-      loadChatSessions();
-    });
 
     btn.appendChild(dot);
     btn.appendChild(label);
+    btn.appendChild(pinBtn);
+    btn.appendChild(archiveBtn);
     btn.appendChild(delBtn);
-    btn.addEventListener('click', () => switchToChatSession(s.id));
+
+    btn.addEventListener('click', async (e) => {
+      if (e.target.closest('.session-delete')) {
+        e.stopPropagation();
+        if (!confirm('Delete "' + s.title + '"?')) return;
+        await geminiAPI.chatDeleteSession(s.id);
+        if (state.chatSessionId === s.id) {
+          state.chatSessionId = null;
+          elements.chatMessages.textContent = '';
+        }
+        loadChatSessions();
+      } else if (e.target.closest('.session-pin')) {
+        s.pinned = !s.pinned;
+        await geminiAPI.chatUpdateSession(s.id, { pinned: s.pinned });
+        renderChatSessions();
+      } else if (e.target.closest('.session-archive')) {
+        s.archived = !s.archived;
+        await geminiAPI.chatUpdateSession(s.id, { archived: s.archived });
+        renderChatSessions();
+      } else {
+        switchToChatSession(s.id);
+      }
+    });
+
     elements.sessionsList.appendChild(btn);
   });
 }
